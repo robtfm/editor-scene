@@ -43,7 +43,11 @@ export const state = {
   // {x,y} position. Set once and left (see selectEntityInTree / primeScroll).
   jumpTarget: null as string | { x: number; y: number } | null,
   // whether the pinned scene is currently frozen (paused)
-  frozen: false
+  frozen: false,
+  // entity id whose delete-confirm dialog is open, or null
+  deleteConfirm: null as string | null,
+  // entity id whose delete button is hovered (for the modifier tooltip), or null
+  hoveredDelete: null as string | null
 }
 
 // The engine creates the scrollable link with scroll_position = None and only

@@ -1,5 +1,6 @@
 import ReactEcs, { Input, UiEntity } from '@dcl/sdk/react-ecs'
 import { Color4 } from '@dcl/sdk/math'
+import { inputSystem, InputAction } from '@dcl/sdk/ecs'
 import {
   state,
   toggleEntity,
@@ -25,7 +26,11 @@ import {
   applyStructuredEdits,
   pauseScene,
   stepScene,
-  playScene
+  playScene,
+  deleteEntity,
+  deleteEntityRecursive,
+  deleteEntityReparent,
+  childIdsOf
 } from './inspector'
 import {
   isColor,
@@ -127,6 +132,50 @@ function smallButton(
 const REVERT_BG = Color4.create(0.3, 0.3, 0.35, 1)
 const TOGGLE_ON = Color4.create(0.28, 0.55, 0.34, 1)
 const TOGGLE_OFF = Color4.create(0.45, 0.3, 0.3, 1)
+const DANGER = Color4.create(0.55, 0.2, 0.22, 1)
+const DANGER_HOVER = Color4.create(0.75, 0.25, 0.27, 1)
+
+const DELETE_HINT =
+  'Del: confirm    Shift+Del: reparent children    Ctrl+Del: recursive'
+
+// Dispatch a delete from a row button, honouring held modifiers:
+// Ctrl (IA_WALK) = recursive, Shift (IA_MODIFIER) = reparent, else confirm.
+function onDeleteClick(entityId: string): void {
+  if (inputSystem.isPressed(InputAction.IA_WALK)) {
+    deleteEntityRecursive(entityId).catch(console.error)
+  } else if (inputSystem.isPressed(InputAction.IA_MODIFIER)) {
+    deleteEntityReparent(entityId).catch(console.error)
+  } else {
+    state.deleteConfirm = entityId
+  }
+}
+
+function deleteButton(entityId: string): ReactEcs.JSX.Element {
+  const hovered = state.hoveredDelete === entityId
+  return (
+    <UiEntity
+      uiTransform={{
+        width: 36,
+        height: 20,
+        positionType: 'absolute',
+        position: { right: 18, top: 2 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: hovered ? DANGER_HOVER : DANGER }}
+      uiText={{ value: 'Del', fontSize: FS - 3, color: TEXT }}
+      onMouseEnter={() => {
+        state.hoveredDelete = entityId
+      }}
+      onMouseLeave={() => {
+        if (state.hoveredDelete === entityId) state.hoveredDelete = null
+      }}
+      onMouseDown={() => {
+        onDeleteClick(entityId)
+      }}
+    />
+  )
+}
 
 function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n
@@ -641,8 +690,7 @@ function entityNode(
           width: '100%',
           height: ROW_H + 2,
           margin: { bottom: 2 },
-          padding: { left: 4 },
-          alignItems: 'center'
+          padding: { left: 4 }
         }}
         uiBackground={{
           color:
@@ -659,7 +707,9 @@ function entityNode(
         onMouseDown={() => {
           if (hasContent) toggleEntity(entityId)
         }}
-      />
+      >
+        {Number(entityId) >= 512 ? deleteButton(entityId) : []}
+      </UiEntity>
       {expanded && (
         <UiEntity
           uiTransform={{
@@ -731,6 +781,123 @@ function actionButton(action: {
         setActiveAction(action.id)
       }}
     />
+  )
+}
+
+function dialogButton(
+  label: string,
+  width: number,
+  color: Color4,
+  onClick: () => void
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={`dlg-${label}`}
+      uiTransform={{
+        width,
+        height: 28,
+        margin: { right: 8 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color }}
+      uiText={{ value: label, fontSize: FS - 1, color: TEXT }}
+      onMouseDown={onClick}
+    />
+  )
+}
+
+// Modal delete-confirm: backdrop (click to cancel) + a centred box showing the
+// entity, its direct children, and the available delete modes.
+function deleteDialog(): ReactEcs.JSX.Element | null {
+  const id = state.deleteConfirm
+  if (id === null) return null
+  const children = childIdsOf(id)
+  const hasChildren = children.length > 0
+  const childList =
+    children.slice(0, 12).join(', ') + (children.length > 12 ? ', …' : '')
+
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {
+          state.deleteConfirm = null
+        }}
+      />
+      <UiEntity
+        uiTransform={{ width: 420, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 26, alignItems: 'center' }}
+          uiText={{
+            value: `Delete ${entityLabel(id)}?`,
+            fontSize: FS + 2,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: hasChildren ? 40 : 4,
+            margin: { top: 4, bottom: 8 }
+          }}
+          uiText={
+            hasChildren
+              ? {
+                  value: `${children.length} direct child${
+                    children.length === 1 ? '' : 'ren'
+                  }: ${childList}`,
+                  fontSize: FS - 2,
+                  color: MUTED,
+                  textAlign: 'top-left'
+                }
+              : undefined
+          }
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 30,
+            flexDirection: 'row',
+            alignItems: 'center'
+          }}
+        >
+          {hasChildren
+            ? [
+                dialogButton('Reparent & delete', 150, BUTTON_BG, () => {
+                  deleteEntityReparent(id).catch(console.error)
+                }),
+                dialogButton('Delete recursive', 130, DANGER, () => {
+                  deleteEntityRecursive(id).catch(console.error)
+                })
+              ]
+            : dialogButton('Delete', 90, DANGER, () => {
+                deleteEntity(id).catch(console.error)
+              })}
+          {dialogButton('Cancel', 80, REVERT_BG, () => {
+            state.deleteConfirm = null
+          })}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
   )
 }
 
@@ -859,7 +1026,32 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       >
         {state.status === 'ready' ? treeBody() : []}
       </UiEntity>
+
+      {/* Delete-button modifier hint (shown while a Del button is hovered) */}
+      {state.hoveredDelete !== null ? (
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 22,
+            positionType: 'absolute',
+            position: { bottom: 0, left: 0 },
+            alignItems: 'center',
+            padding: { left: 10 }
+          }}
+          uiBackground={{ color: HEADER_BG }}
+          uiText={{
+            value: DELETE_HINT,
+            fontSize: FS - 3,
+            color: MUTED,
+            textAlign: 'middle-left'
+          }}
+        />
+      ) : (
+        []
+      )}
       </UiEntity>
+
+      {deleteDialog() ?? []}
     </UiEntity>
   )
 }
