@@ -41,7 +41,9 @@ export const state = {
   hoveredOverlay: null as string | null,
   // scroll-to target for the tree body: a row elementId (reference) or a literal
   // {x,y} position. Set once and left (see selectEntityInTree / primeScroll).
-  jumpTarget: null as string | { x: number; y: number } | null
+  jumpTarget: null as string | { x: number; y: number } | null,
+  // whether the pinned scene is currently frozen (paused)
+  frozen: false
 }
 
 // The engine creates the scrollable link with scroll_position = None and only

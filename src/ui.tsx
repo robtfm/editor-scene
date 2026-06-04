@@ -22,7 +22,10 @@ import { overlayUi } from './overlay'
 import {
   refresh,
   setComponentValue,
-  applyStructuredEdits
+  applyStructuredEdits,
+  pauseScene,
+  stepScene,
+  playScene
 } from './inspector'
 import {
   isColor,
@@ -66,9 +69,38 @@ function statusText(): string {
       return `Error: ${state.error}`
     case 'ready':
       return state.scene !== undefined
-        ? `${state.scene.title}  ·  ${state.scene.hash.slice(0, 10)}…`
+        ? `${state.scene.title}  ·  ${state.scene.hash.slice(0, 10)}…${
+            state.frozen ? '  ·  PAUSED' : ''
+          }`
         : 'ready'
   }
+}
+
+// A transport-control button that greys out when disabled.
+function pbButton(
+  label: string,
+  enabled: boolean,
+  onClick: () => void
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={`pb-${label}`}
+      uiTransform={{
+        width: 54,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{
+        color: enabled ? BUTTON_BG : Color4.create(0.2, 0.2, 0.24, 1)
+      }}
+      uiText={{ value: label, fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
+      onMouseDown={() => {
+        if (enabled) onClick()
+      }}
+    />
+  )
 }
 
 function smallButton(
@@ -782,17 +814,35 @@ export function inspectorUi(): ReactEcs.JSX.Element {
             }}
           />
         </UiEntity>
-        {/* Actions bar */}
+        {/* Actions bar: overlay actions (left) + transport controls (right) */}
         <UiEntity
           uiTransform={{
             width: '100%',
             height: 24,
             flexDirection: 'row',
             alignItems: 'center',
+            justifyContent: 'space-between',
             margin: { top: 4 }
           }}
         >
-          {ACTIONS.map((action) => actionButton(action))}
+          <UiEntity
+            uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
+          >
+            {ACTIONS.map((action) => actionButton(action))}
+          </UiEntity>
+          <UiEntity
+            uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
+          >
+            {pbButton('Pause', state.status === 'ready' && !state.frozen, () => {
+              pauseScene().catch(console.error)
+            })}
+            {pbButton('Step', state.status === 'ready' && state.frozen, () => {
+              stepScene().catch(console.error)
+            })}
+            {pbButton('Play', state.status === 'ready' && state.frozen, () => {
+              playScene().catch(console.error)
+            })}
+          </UiEntity>
         </UiEntity>
       </UiEntity>
 

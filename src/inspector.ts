@@ -9,6 +9,7 @@ import {
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
+import { sleep } from './utils'
 
 // Boot sequence: log in, then load the current scene's component state.
 export async function startInspector(): Promise<void> {
@@ -39,7 +40,52 @@ export async function refresh(): Promise<void> {
     console.error('set_scene failed:', e)
   }
 
+  await syncFrozenState()
   await reloadSnapshot()
+}
+
+// Sync the local frozen flag from the pinned scene's actual status (it may
+// differ from our last action after a scene change or external freeze).
+async function syncFrozenState(): Promise<void> {
+  try {
+    const stats = await BevyApi.consoleCommand('scene_stats')
+    state.frozen = /status:\s*blocked/i.test(stats)
+  } catch {
+    // leave the flag as-is
+  }
+}
+
+// --- transport controls (freeze / tick / unfreeze the pinned scene) ---
+
+export async function pauseScene(): Promise<void> {
+  try {
+    await BevyApi.consoleCommand('freeze_scene')
+    state.frozen = true
+  } catch (e) {
+    console.error('freeze_scene failed:', e)
+  }
+}
+
+export async function playScene(): Promise<void> {
+  try {
+    await BevyApi.consoleCommand('unfreeze_scene')
+    state.frozen = false
+  } catch (e) {
+    console.error('unfreeze_scene failed:', e)
+  }
+}
+
+// Advance the frozen scene by `count` ticks, then re-pull the snapshot so the
+// tree reflects the stepped frame. The scene re-freezes itself after the ticks.
+export async function stepScene(count = 1): Promise<void> {
+  try {
+    await BevyApi.consoleCommand('tick_scene', [String(count)])
+    state.frozen = true
+    await sleep(150)
+    await reloadSnapshot()
+  } catch (e) {
+    console.error('tick_scene failed:', e)
+  }
 }
 
 // Re-pull the CRDT snapshot for the already-pinned scene (no re-resolve/re-pin).
