@@ -1,0 +1,200 @@
+import { engine } from '@dcl/sdk/ecs'
+import { type LiveSceneInfo } from './bevy-api/interface'
+
+// crdt_snapshot shape: { "<entityId>": { "<ComponentName>": value, ... }, ... }
+export type Snapshot = Record<string, Record<string, unknown>>
+
+export type InspectorStatus =
+  | 'logging-in'
+  | 'no-scene'
+  | 'loading-snapshot'
+  | 'ready'
+  | 'error'
+
+// key: `${entityId}/${componentName}`
+export type ComponentKey = string
+
+export function componentKey(entityId: string, name: string): ComponentKey {
+  return `${entityId}/${name}`
+}
+
+export const state = {
+  status: 'logging-in' as InspectorStatus,
+  error: '',
+  scene: undefined as LiveSceneInfo | undefined,
+  snapshot: {} as Snapshot,
+  expandedEntities: new Set<string>(),
+  expandedComponents: new Set<ComponentKey>(),
+  // raw-JSON edit text per component, used only in raw mode (absent => verbatim)
+  drafts: new Map<ComponentKey, string>(),
+  // structured edits keyed by `${componentKey}::${path}` (see fields.ts). Numbers
+  // and strings stored as text (free typing), booleans as bool. Absent => the
+  // snapshot leaf value verbatim.
+  fieldEdits: new Map<string, string | boolean>(),
+  // components currently editing as raw JSON instead of the structured editor
+  rawMode: new Set<ComponentKey>(),
+  // transient per-component result of the last Apply ('' => none)
+  editStatus: new Map<ComponentKey, string>(),
+  // currently-active overlay action (e.g. 'select'), or null
+  activeAction: null as string | null,
+  // entity whose world marker is hovered (for the id tooltip), or null
+  hoveredOverlay: null as string | null,
+  // scroll-to target for the tree body: a row elementId (reference) or a literal
+  // {x,y} position. Set once and left (see selectEntityInTree / primeScroll).
+  jumpTarget: null as string | { x: number; y: number } | null
+}
+
+// The engine creates the scrollable link with scroll_position = None and only
+// acts on scroll_position *changes* via its update path — so the very first
+// change merely initializes the link without scrolling. Prime it once at load
+// with a harmless literal scroll-to-top, so the user's first real jump is
+// already a "subsequent" change that takes effect.
+let scrollPrimed = false
+export function primeScroll(): void {
+  if (scrollPrimed) return
+  scrollPrimed = true
+  let elapsed = 0
+  const sys = (dt: number): void => {
+    elapsed += dt
+    if (elapsed >= 0.5) {
+      state.jumpTarget = { x: 0, y: 0 }
+      engine.removeSystem(sys)
+    }
+  }
+  engine.addSystem(sys)
+}
+
+export function rowElementId(id: string): string {
+  return `row-${id}`
+}
+
+export function setActiveAction(action: string): void {
+  state.activeAction = state.activeAction === action ? null : action
+}
+
+// The compact JSON the editor shows for a component value when no draft is held.
+export function valueJson(value: unknown): string {
+  return JSON.stringify(value)
+}
+
+export function getDraft(key: ComponentKey, value: unknown): string {
+  return state.drafts.get(key) ?? valueJson(value)
+}
+
+export function setDraft(key: ComponentKey, text: string): void {
+  state.drafts.set(key, text)
+  state.editStatus.delete(key)
+}
+
+export function revertDraft(key: ComponentKey): void {
+  state.drafts.delete(key)
+  state.editStatus.delete(key)
+}
+
+export function toggleRawMode(key: ComponentKey): void {
+  if (state.rawMode.has(key)) state.rawMode.delete(key)
+  else state.rawMode.add(key)
+  state.editStatus.delete(key)
+}
+
+// Drop every pending edit (raw + structured) for a component, e.g. after a
+// successful Apply so the widgets reflect the freshly-applied snapshot.
+export function clearComponentEdits(key: ComponentKey): void {
+  state.drafts.delete(key)
+  const prefix = `${key}::`
+  for (const fieldKey of state.fieldEdits.keys()) {
+    if (fieldKey.startsWith(prefix)) state.fieldEdits.delete(fieldKey)
+  }
+}
+
+export function toggleEntity(id: string): void {
+  if (state.expandedEntities.has(id)) state.expandedEntities.delete(id)
+  else state.expandedEntities.add(id)
+}
+
+export function toggleComponent(key: string): void {
+  if (state.expandedComponents.has(key)) state.expandedComponents.delete(key)
+  else state.expandedComponents.add(key)
+}
+
+export type Forest = {
+  roots: string[]
+  children: Map<string, string[]>
+}
+
+// Parent of an entity from its Transform.parent (proto u32). Entities with no
+// Transform default to root (0). Returns null for root and self-parents.
+export function parentOf(snapshot: Snapshot, id: string): string | null {
+  if (id === '0') return null
+  const transform = snapshot[id]?.Transform as { parent?: number } | undefined
+  const parentId = transform?.parent === undefined ? '0' : String(transform.parent)
+  return parentId === id ? null : parentId
+}
+
+// Build the entity hierarchy from the snapshot's Transform parents. An entity is
+// a forest root when its parent is absent from the snapshot (e.g. the parent has
+// no components of its own, or is the scene root). Cycles/orphans are surfaced as
+// extra roots by the renderer so nothing is silently dropped.
+export function buildForest(snapshot: Snapshot): Forest {
+  const ids = Object.keys(snapshot)
+  const present = new Set(ids)
+  const children = new Map<string, string[]>()
+  const roots: string[] = []
+
+  for (const id of ids) {
+    const parent = parentOf(snapshot, id)
+    if (parent !== null && present.has(parent)) {
+      const siblings = children.get(parent) ?? []
+      siblings.push(id)
+      children.set(parent, siblings)
+    } else {
+      roots.push(id)
+    }
+  }
+
+  const byId = (a: string, b: string): number => Number(a) - Number(b)
+  roots.sort(byId)
+  for (const siblings of children.values()) siblings.sort(byId)
+  return { roots, children }
+}
+
+// Expand the entity (so its components show), expand all its ancestors (so its
+// row actually renders in the nested tree), and request a scroll to its row.
+export function selectEntityInTree(snapshot: Snapshot, id: string): void {
+  let cur = parentOf(snapshot, id)
+  while (cur !== null && cur in snapshot) {
+    state.expandedEntities.add(cur)
+    cur = parentOf(snapshot, cur)
+  }
+  state.expandedEntities.add(id)
+
+  // The engine scrolls to an elementId by reading the target row's *settled*
+  // layout position, and only acts on a *change* to scrollPosition. Set it once,
+  // a few frames after expanding (so the freshly-built subtree has laid out),
+  // and leave it set — clearing it would risk coalescing with the set in the
+  // same LWW tick, leaving the engine seeing only the cleared value.
+  const target = rowElementId(id)
+  let elapsed = 0
+  const jumpSystem = (dt: number): void => {
+    elapsed += dt
+    if (elapsed >= 0.12) {
+      state.jumpTarget = target
+      engine.removeSystem(jumpSystem)
+    }
+  }
+  engine.addSystem(jumpSystem)
+}
+
+// root/player/camera are the well-known reserved entity ids.
+export function entityLabel(id: string): string {
+  switch (id) {
+    case '0':
+      return `root (${id})`
+    case '1':
+      return `player (${id})`
+    case '2':
+      return `camera (${id})`
+    default:
+      return id
+  }
+}
