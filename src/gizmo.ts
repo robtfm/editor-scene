@@ -728,21 +728,25 @@ export function startGizmoDrag(): void {
         accumPx: 0
       }
     }
-  } else if (handle.length === 1) {
-    const axisDir = Vector3.normalize(rotateVec3ByQuat(unit(handle as Axis), wt.rotation))
-    drag = {
-      ...base,
-      kind: 'translate-axis',
-      axisDir,
-      grabT: closestAxisParam(wt.position, axisDir, ray.o, ray.d)
-    }
   } else {
-    const p = PLANES.find((pl) => pl.id === handle)
-    if (p === undefined) return
-    const normal = Vector3.normalize(rotateVec3ByQuat(unit(p.n), wt.rotation))
-    const grabHit = rayPlaneHit(ray.o, ray.d, wt.position, normal)
-    if (grabHit === null) return
-    drag = { ...base, kind: 'translate-plane', planeNormal: normal, grabHit }
+    // translate handle — axes are world-aligned in global mode, else local.
+    const transRot = state.orientGlobal ? Quaternion.Identity() : wt.rotation
+    if (handle.length === 1) {
+      const axisDir = Vector3.normalize(rotateVec3ByQuat(unit(handle as Axis), transRot))
+      drag = {
+        ...base,
+        kind: 'translate-axis',
+        axisDir,
+        grabT: closestAxisParam(wt.position, axisDir, ray.o, ray.d)
+      }
+    } else {
+      const p = PLANES.find((pl) => pl.id === handle)
+      if (p === undefined) return
+      const normal = Vector3.normalize(rotateVec3ByQuat(unit(p.n), transRot))
+      const grabHit = rayPlaneHit(ray.o, ray.d, wt.position, normal)
+      if (grabHit === null) return
+      drag = { ...base, kind: 'translate-plane', planeNormal: normal, grabHit }
+    }
   }
   groupStart = captureGroup()
   state.gizmoDragging = true
@@ -882,7 +886,10 @@ function updateDrag(camT: { position: Vector3 }): void {
 
   lastDragWorld = world
   lastDragRot = drag.startRot
-  setGizmoTransform(world, drag.startRot, scaleFor(world, camT.position))
+  // Keep the displayed axes global while dragging in global mode (startRot is the
+  // entity's local rotation, kept in lastDragRot only for the post-drag settle).
+  const dispRot = state.orientGlobal ? Quaternion.Identity() : drag.startRot
+  setGizmoTransform(world, dispRot, scaleFor(world, camT.position))
 }
 
 // Quaternions are close (same orientation) when |dot| ~ 1.
@@ -940,17 +947,21 @@ function updateGizmo(dt: number): void {
     }
   }
 
+  // Translate can use world axes (global) instead of the entity's local axes.
+  const axisRot =
+    mode === 'translate' && state.orientGlobal ? Quaternion.Identity() : rot
+
   const s = scaleFor(pos, camT.position)
-  setGizmoTransform(pos, rot, s)
+  setGizmoTransform(pos, axisRot, s)
 
   const ray = pointerRay()
   if (ray !== null) {
     const hover =
       mode === 'rotate'
-        ? pickRotate(pos, rot, s, ray.o, ray.d)
+        ? pickRotate(pos, axisRot, s, ray.o, ray.d)
         : mode === 'scale'
-          ? pickScale(pos, rot, s, ray.o, ray.d)
-          : pickTranslate(pos, rot, s, ray.o, ray.d)
+          ? pickScale(pos, axisRot, s, ray.o, ray.d)
+          : pickTranslate(pos, axisRot, s, ray.o, ray.d)
     state.gizmoHover = hover
     applyHighlight(hover)
   }

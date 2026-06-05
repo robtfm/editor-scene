@@ -820,34 +820,54 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
   )
 }
 
-// Rotate/scale pivot toggle: around the active entity vs each item's own origin.
-// Only meaningful for rotate/scale with more than one entity selected.
-function pivotToggle(): ReactEcs.JSX.Element | [] {
-  const relevant =
-    (state.activeAction === 'rotate' || state.activeAction === 'scale') &&
-    state.selected.size > 1
-  if (!relevant) return []
+function toggleChip(
+  key: string,
+  label: string,
+  onClick: () => void
+): ReactEcs.JSX.Element {
   return (
     <UiEntity
-      key="pivot-toggle"
+      key={key}
       uiTransform={{
-        width: 96,
+        width: 110,
         height: 22,
         margin: { left: 6 },
         alignItems: 'center',
         justifyContent: 'center'
       }}
       uiBackground={{ color: REVERT_BG }}
-      uiText={{
-        value: state.pivotEach ? 'Pivot: Each' : 'Pivot: Active',
-        fontSize: FS - 2,
-        color: TEXT
-      }}
-      onMouseDown={() => {
-        state.pivotEach = !state.pivotEach
-      }}
+      uiText={{ value: label, fontSize: FS - 2, color: TEXT }}
+      onMouseDown={onClick}
     />
   )
+}
+
+// Mode-dependent option toggle shown next to the action buttons:
+// - Translate: axis orientation (the active entity's local axes vs world axes).
+// - Rotate/Scale (with >1 selected): pivot (active entity vs each item's origin).
+function modeToggle(): ReactEcs.JSX.Element | [] {
+  if (state.activeAction === 'translate' && state.activeEntity !== null) {
+    return toggleChip(
+      'orient-toggle',
+      state.orientGlobal ? 'Orient: Global' : 'Orient: Local',
+      () => {
+        state.orientGlobal = !state.orientGlobal
+      }
+    )
+  }
+  if (
+    (state.activeAction === 'rotate' || state.activeAction === 'scale') &&
+    state.selected.size > 1
+  ) {
+    return toggleChip(
+      'pivot-toggle',
+      state.pivotEach ? 'Pivot: Each' : 'Pivot: Active',
+      () => {
+        state.pivotEach = !state.pivotEach
+      }
+    )
+  }
+  return []
 }
 
 function actionButton(action: {
@@ -1091,7 +1111,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
           >
             {ACTIONS.map((action) => actionButton(action))}
-            {pivotToggle()}
+            {modeToggle()}
           </UiEntity>
           <UiEntity
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}

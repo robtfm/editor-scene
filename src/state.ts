@@ -55,6 +55,8 @@ export const state = {
   // rotate/scale pivot: false = around the active entity (orbits positions),
   // true = each item about its own origin (positions unchanged).
   pivotEach: false,
+  // translate axis orientation: false = active entity's local axes, true = world axes.
+  orientGlobal: false,
   // in-progress marker drag-box (screen px). add = shift, remove = ctrl.
   selectBox: null as
     | { startX: number; startY: number; curX: number; curY: number; add: boolean; remove: boolean }
