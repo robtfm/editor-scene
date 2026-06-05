@@ -643,6 +643,22 @@ let pendingWorld: Vector3 | null = null
 let pendingRot: Quaternion | null = null
 let pendingTime = 0
 
+// During (and briefly after) a drag, the live world transform of the moving
+// subtree — exposed so the relations overlay can follow in-drag positions before
+// the snapshot catches up. `liveOp` maps a pre-drag world position to its live
+// position (null = identity, e.g. per-item pivot where roots don't move);
+// `liveMovingRoots` is the set of top-level moving entities. Both held through
+// the post-drag settle and cleared when the snapshot catches up.
+let liveOp: ((w: Vector3) => Vector3) | null = null
+let liveMovingRoots: Set<string> | null = null
+
+export function dragMovingRoots(): Set<string> | null {
+  return liveMovingRoots
+}
+export function dragLiveWorld(w: Vector3): Vector3 {
+  return liveOp === null ? { ...w } : liveOp(w)
+}
+
 // Per-entity start state for the whole (top-level) selection, captured at drag
 // start. The active entity drives the handle math; its delta is applied to all.
 type GroupEntry = {
@@ -795,6 +811,7 @@ function applyGroup(
 function updateDrag(camT: { position: Vector3 }): void {
   if (drag === null || state.activeEntity === null) return
   const pivot = drag.startWorld
+  liveMovingRoots = new Set(groupStart.map((g) => g.id))
 
   if (drag.kind === 'scale-axis' || drag.kind === 'scale-uniform') {
     // Accumulate relative pointer motion along the handle's screen direction;
@@ -815,6 +832,9 @@ function updateDrag(camT: { position: Vector3 }): void {
         worldRot: null,
         scale: { x: g.scale.x * f, y: g.scale.y * f, z: g.scale.z * f }
       }))
+      liveOp = each
+        ? null
+        : (w) => Vector3.add(pivot, Vector3.scale(Vector3.subtract(w, pivot), f))
     } else {
       const axis = drag.scaleAxis as Axis
       const axisDir = drag.scaleAxisDir as Vector3
@@ -829,6 +849,12 @@ function updateDrag(camT: { position: Vector3 }): void {
           scale: { ...g.scale, [axis]: g.scale[axis] * f }
         }
       })
+      liveOp = each
+        ? null
+        : (w) => {
+            const along = Vector3.dot(Vector3.subtract(w, pivot), axisDir)
+            return Vector3.add(w, Vector3.scale(axisDir, along * (f - 1)))
+          }
     }
     // scale leaves the active entity put, so the gizmo doesn't move
     lastDragWorld = pivot
@@ -859,6 +885,9 @@ function updateDrag(camT: { position: Vector3 }): void {
       worldRot: Quaternion.multiply(dq, g.startWorldRot),
       scale: null
     }))
+    liveOp = each
+      ? null
+      : (w) => Vector3.add(pivot, rotateVec3ByQuat(Vector3.subtract(w, pivot), dq))
 
     lastDragWorld = pivot
     lastDragRot = Quaternion.multiply(dq, drag.startRot)
@@ -883,6 +912,7 @@ function updateDrag(camT: { position: Vector3 }): void {
     worldRot: null,
     scale: null
   }))
+  liveOp = (w) => Vector3.add(w, worldDelta)
 
   lastDragWorld = world
   lastDragRot = drag.startRot
@@ -905,6 +935,8 @@ function updateGizmo(dt: number): void {
     applyHighlight(null)
     pendingWorld = null
     pendingRot = null
+    liveOp = null
+    liveMovingRoots = null
     return
   }
 
@@ -941,6 +973,8 @@ function updateGizmo(dt: number): void {
     if (settled || pendingTime > 1.5) {
       pendingWorld = null
       pendingRot = null
+      liveOp = null
+      liveMovingRoots = null
     } else {
       pos = pendingWorld
       rot = pendingRot

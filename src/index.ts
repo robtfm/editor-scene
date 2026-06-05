@@ -3,6 +3,7 @@ import { inspectorUi } from './ui'
 import { startInspector } from './inspector'
 import { startCameraProjection } from './camera-projection'
 import { setupGizmo } from './gizmo'
+import { setupRelations } from './relations'
 import { startSelectBox } from './overlay'
 import { startSystemActions } from './system-actions'
 
@@ -14,6 +15,7 @@ export function main(): void {
 
   startCameraProjection()
   setupGizmo()
+  setupRelations()
   startSelectBox()
   startSystemActions()
   ReactEcsRenderer.setUiRenderer(inspectorUi)

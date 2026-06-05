@@ -22,6 +22,7 @@ import {
 } from './state'
 import { overlayUi } from './overlay'
 import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
+import { relationsCameraEntity } from './relations'
 import {
   refresh,
   setComponentValue,
@@ -778,6 +779,26 @@ const ACTIONS: Array<{ id: string; label: string }> = [
 
 // Fullscreen panel showing the gizmo camera's render (composited on top of the
 // world). Pointer-transparent for now; the drag handler comes with interaction.
+// Fullscreen pass-through panel showing the relations camera (parent/child
+// links for the current selection), composited under the gizmo and markers.
+function relationsPanel(): ReactEcs.JSX.Element | null {
+  if (state.selected.size === 0) return null
+  const cam = relationsCameraEntity()
+  if (cam === null) return null
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        pointerFilter: 'none'
+      }}
+      uiBackground={{ textureMode: 'stretch', videoTexture: { videoPlayerEntity: cam } }}
+    />
+  )
+}
+
 function gizmoPanel(): ReactEcs.JSX.Element | null {
   const mode = state.activeAction
   if (
@@ -1032,6 +1053,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
         pointerFilter: 'none'
       }}
     >
+      {relationsPanel() ?? []}
       {overlayUi() ?? []}
       {gizmoPanel() ?? []}
       <UiEntity
