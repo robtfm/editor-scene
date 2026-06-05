@@ -14,7 +14,7 @@ import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
 import { state, parentOf, buildForest } from './state'
 import { computeWorldPositions } from './world-pos'
 import { cameraFovY } from './camera-projection'
-import { dragMovingRoots, dragLiveWorld } from './gizmo'
+import { liveWorldPos } from './gizmo'
 
 // A render layer drawn only by the relations camera, composited over the world
 // (and under the gizmo) to draw parent/child links for the current selection.
@@ -141,7 +141,7 @@ function showLine(i: number, on: boolean): void {
 function updateRelations(): void {
   if (relCamera === null || relRoot === null) return
 
-  if (state.selected.size === 0) {
+  if (!state.showLinks || state.selected.size === 0) {
     for (let i = 0; i < lines.length; i++) showLine(i, false)
     return
   }
@@ -153,19 +153,9 @@ function updateRelations(): void {
   const world = computeWorldPositions(state.snapshot)
   if (world === null) return
 
-  // During a gizmo drag the snapshot is stale; map any endpoint inside a moving
-  // subtree to its live in-drag position so the lines follow.
-  const moving = dragMovingRoots()
-  const livePos = (id: string): Vector3 => {
-    const w = world.get(id) as Vector3
-    if (moving === null) return w
-    let cur: string | null = id
-    while (cur !== null) {
-      if (moving.has(cur)) return dragLiveWorld(w)
-      cur = parentOf(state.snapshot, cur)
-    }
-    return w
-  }
+  // During a gizmo drag the snapshot is stale; map endpoints to their live
+  // in-drag positions so the lines follow.
+  const livePos = (id: string): Vector3 => liveWorldPos(id, world.get(id) as Vector3)
 
   // Collect the unique parent->child edges incident to any selected entity.
   const forest = buildForest(state.snapshot)

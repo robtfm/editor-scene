@@ -12,8 +12,13 @@ import {
   type Entity
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
-import { state, topLevelSelected } from './state'
-import { worldTransformOf, worldToLocalPosition, worldToLocalRotation } from './world-pos'
+import { state, topLevelSelected, parentOf } from './state'
+import {
+  worldTransformOf,
+  worldToLocalPosition,
+  worldToLocalRotation,
+  computeWorldPositions
+} from './world-pos'
 import { rotateVec3ByQuat } from './perspective-to-screen'
 import { cameraFovY, projectWorldToScreen } from './camera-projection'
 import { fireTransform, syncAfterDrag } from './inspector'
@@ -651,12 +656,32 @@ let pendingTime = 0
 // the post-drag settle and cleared when the snapshot catches up.
 let liveOp: ((w: Vector3) => Vector3) | null = null
 let liveMovingRoots: Set<string> | null = null
+// Every entity's world position captured at drag start. The live position is the
+// op applied to this fixed value (not the live snapshot), so during the post-
+// drag settle it stays put at exactly the value the snapshot converges to —
+// avoiding a one-frame double-apply jump when the snapshot catches up.
+let liveStartWorld: Map<string, Vector3> | null = null
 
 export function dragMovingRoots(): Set<string> | null {
   return liveMovingRoots
 }
 export function dragLiveWorld(w: Vector3): Vector3 {
   return liveOp === null ? { ...w } : liveOp(w)
+}
+
+// Map a snapshot world position to its live in-drag position when the entity is
+// inside the moving subtree. Used by the overlays (markers, links) to follow a
+// gizmo drag while the snapshot is still stale; a no-op when nothing is dragging.
+export function liveWorldPos(id: string, snapshotWorld: Vector3): Vector3 {
+  if (liveMovingRoots === null) return snapshotWorld
+  let cur: string | null = id
+  while (cur !== null) {
+    if (liveMovingRoots.has(cur)) {
+      return dragLiveWorld(liveStartWorld?.get(id) ?? snapshotWorld)
+    }
+    cur = parentOf(state.snapshot, cur)
+  }
+  return snapshotWorld
 }
 
 // Per-entity start state for the whole (top-level) selection, captured at drag
@@ -765,6 +790,7 @@ export function startGizmoDrag(): void {
     }
   }
   groupStart = captureGroup()
+  liveStartWorld = computeWorldPositions(state.snapshot)
   state.gizmoDragging = true
 }
 
@@ -796,15 +822,18 @@ function applyGroup(
     if (localPos === null) continue
     const localRot =
       r.worldRot === null ? g.rotation : worldToLocalRotation(state.snapshot, g.id, r.worldRot)
-    fireTransform(
-      g.id,
-      JSON.stringify({
-        position: localPos,
-        rotation: localRot ?? g.rotation,
-        scale: r.scale ?? g.scale,
-        parent: g.parent
-      })
-    )
+    const transform = {
+      position: localPos,
+      rotation: localRot ?? g.rotation,
+      scale: r.scale ?? g.scale,
+      parent: g.parent
+    }
+    fireTransform(g.id, JSON.stringify(transform))
+    // Optimistically reflect the write in the local snapshot so a follow-up read
+    // (a new drag, the tree, markers) sees it immediately, without waiting for
+    // the post-drag reload. reloadAfter confirms it shortly after.
+    const entry = state.snapshot[g.id] ?? (state.snapshot[g.id] = {})
+    entry.Transform = transform
   }
 }
 
@@ -937,6 +966,7 @@ function updateGizmo(dt: number): void {
     pendingRot = null
     liveOp = null
     liveMovingRoots = null
+    liveStartWorld = null
     return
   }
 
@@ -975,6 +1005,7 @@ function updateGizmo(dt: number): void {
       pendingRot = null
       liveOp = null
       liveMovingRoots = null
+      liveStartWorld = null
     } else {
       pos = pendingWorld
       rot = pendingRot

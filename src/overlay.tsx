@@ -10,6 +10,7 @@ import {
 } from './state'
 import { computeWorldPositions, shouldMark } from './world-pos'
 import { projectWorldToScreen } from './camera-projection'
+import { liveWorldPos } from './gizmo'
 
 const CIRCLE_D = 16
 const MARKER = Color4.create(0.4, 0.85, 1, 1)
@@ -161,7 +162,8 @@ function marker(
   id: string,
   left: number,
   top: number,
-  hovered: boolean
+  hovered: boolean,
+  interactive: boolean
 ): ReactEcs.JSX.Element {
   const color = markerColor(id, hovered)
   const selected = state.selected.has(id)
@@ -175,20 +177,33 @@ function marker(
         position: { left: left - CIRCLE_D / 2, top: top - CIRCLE_D / 2 },
         borderRadius: 999,
         borderWidth: 2,
-        borderColor: color
+        borderColor: color,
+        pointerFilter: interactive ? 'block' : 'none'
       }}
       uiBackground={{ color: { ...color, a: selected ? 0.6 : 0.35 } }}
-      onMouseEnter={() => {
-        state.hoveredOverlay = id
-      }}
-      onMouseLeave={() => {
-        if (state.hoveredOverlay === id) state.hoveredOverlay = null
-      }}
-      onMouseDown={() => {
-        const { shift, ctrl } = clickModifiers()
-        selectionClick(id, shift, ctrl)
-        if (state.selected.has(id)) selectEntityInTree(state.snapshot, id)
-      }}
+      onMouseEnter={
+        interactive
+          ? () => {
+              state.hoveredOverlay = id
+            }
+          : undefined
+      }
+      onMouseLeave={
+        interactive
+          ? () => {
+              if (state.hoveredOverlay === id) state.hoveredOverlay = null
+            }
+          : undefined
+      }
+      onMouseDown={
+        interactive
+          ? () => {
+              const { shift, ctrl } = clickModifiers()
+              selectionClick(id, shift, ctrl)
+              if (state.selected.has(id)) selectEntityInTree(state.snapshot, id)
+            }
+          : undefined
+      }
     />
   )
 }
@@ -197,7 +212,15 @@ function marker(
 // entity's origin, projected to screen. The container passes the pointer
 // through (`pointerFilter: 'none'`); only the circles capture hover/click.
 export function overlayUi(): ReactEcs.JSX.Element | null {
-  if (state.activeAction !== 'select' || state.status !== 'ready') return null
+  if (state.status !== 'ready') return null
+
+  // Select mode shows all nodes interactively; outside it, the node-display
+  // setting governs whether markers appear (all / only selected / none).
+  const selecting = state.activeAction === 'select'
+  const showAll = selecting || state.nodeDisplay === 'always'
+  const showSelected = state.nodeDisplay === 'selected'
+  if (!showAll && !showSelected) return null
+
   const worldPositions = computeWorldPositions(state.snapshot)
   if (worldPositions === null) return null
 
@@ -206,12 +229,14 @@ export function overlayUi(): ReactEcs.JSX.Element | null {
   lastMarkers.clear()
   for (const [id, world] of worldPositions) {
     if (!shouldMark(state.snapshot, id)) continue
-    const screen = projectWorldToScreen(world)
+    if (!showAll && !state.selected.has(id)) continue
+    // Follow live in-drag positions while a gizmo drag is in progress.
+    const screen = projectWorldToScreen(liveWorldPos(id, world))
     if (screen === null || !screen.onScreen) continue
     lastMarkers.set(id, { x: screen.left, y: screen.top })
     const hovered = state.hoveredOverlay === id
-    markers.push(marker(id, screen.left, screen.top, hovered))
-    if (hovered) hoveredTip = tooltip(id, screen.left, screen.top)
+    markers.push(marker(id, screen.left, screen.top, hovered, selecting))
+    if (hovered && selecting) hoveredTip = tooltip(id, screen.left, screen.top)
   }
 
   return (
@@ -224,9 +249,9 @@ export function overlayUi(): ReactEcs.JSX.Element | null {
         pointerFilter: 'none'
       }}
     >
-      {boxSurface()}
+      {selecting ? boxSurface() : []}
       {markers}
-      {selectionBox()}
+      {selecting ? selectionBox() : []}
       {hoveredTip ?? []}
     </UiEntity>
   )

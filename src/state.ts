@@ -35,8 +35,16 @@ export const state = {
   rawMode: new Set<ComponentKey>(),
   // transient per-component result of the last Apply ('' => none)
   editStatus: new Map<ComponentKey, string>(),
-  // currently-active overlay action (e.g. 'select'), or null
-  activeAction: null as string | null,
+  // current mode: a tool ('translate'|'rotate'|'scale') or 'select'. Always one
+  // of these — toggling out of select returns to the last tool.
+  activeAction: 'select' as string,
+  // the last-used tool, restored when select mode is toggled off
+  lastTool: 'translate' as 'translate' | 'rotate' | 'scale',
+  // when to draw node markers: 'always' (all nodes), 'selected' (only selected),
+  // 'selecting' (only while in select mode). Select mode always shows all nodes.
+  nodeDisplay: 'selecting' as 'always' | 'selected' | 'selecting',
+  // whether to draw parent/child relationship links
+  showLinks: true,
   // entity whose world marker is hovered (for the id tooltip), or null
   hoveredOverlay: null as string | null,
   // scroll-to target for the tree body: a row elementId (reference) or a literal
@@ -94,8 +102,23 @@ export function rowElementId(id: string): string {
   return `row-${id}`
 }
 
+const TOOLS = ['translate', 'rotate', 'scale']
+
+// Switch mode. Selecting a tool makes it current (and remembered); the Select
+// button toggles select on/off, returning to the last tool when toggled off.
 export function setActiveAction(action: string): void {
-  state.activeAction = state.activeAction === action ? null : action
+  if (action === 'select') {
+    state.activeAction = state.activeAction === 'select' ? state.lastTool : 'select'
+    return
+  }
+  if (TOOLS.includes(action)) state.lastTool = action as 'translate' | 'rotate' | 'scale'
+  state.activeAction = action
+}
+
+const NODE_DISPLAY_ORDER = ['always', 'selected', 'selecting'] as const
+export function cycleNodeDisplay(): void {
+  const i = NODE_DISPLAY_ORDER.indexOf(state.nodeDisplay)
+  state.nodeDisplay = NODE_DISPLAY_ORDER[(i + 1) % NODE_DISPLAY_ORDER.length]
 }
 
 export function isSelected(id: string): boolean {

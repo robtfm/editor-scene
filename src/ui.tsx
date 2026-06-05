@@ -8,6 +8,7 @@ import {
   toggleRawMode,
   clearComponentEdits,
   setActiveAction,
+  cycleNodeDisplay,
   selectionClick,
   rowElementId,
   entityLabel,
@@ -955,6 +956,69 @@ function clearParentButton(): ReactEcs.JSX.Element {
   )
 }
 
+const NODE_LABEL: Record<string, string> = {
+  always: 'Nodes: All',
+  selected: 'Nodes: Selected',
+  selecting: 'Nodes: On select'
+}
+
+// Cycles the node-display mode (all / selected / only while selecting).
+function nodeDisplayButton(): ReactEcs.JSX.Element {
+  return toggleChip('node-display', NODE_LABEL[state.nodeDisplay], () => {
+    cycleNodeDisplay()
+  })
+}
+
+// Toggles the parent/child relationship links.
+function linksButton(): ReactEcs.JSX.Element {
+  return toggleChip('links-toggle', state.showLinks ? 'Links: On' : 'Links: Off', () => {
+    state.showLinks = !state.showLinks
+  })
+}
+
+// A thin vertical divider with surrounding space, to group toolbar sections.
+function toolbarDivider(key: string): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={key}
+      uiTransform={{ width: 1, height: 16, margin: { left: 10, right: 4 } }}
+      uiBackground={{ color: Color4.create(1, 1, 1, 0.18) }}
+    />
+  )
+}
+
+// Floating top-centre toolbar: mode (tools + select), parenting, and the
+// overlay-display controls. Kept out of the tree panel so its header is free
+// for tree-specific actions.
+function controlPanel(): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        positionType: 'absolute',
+        position: { top: 10, left: 0 },
+        flexDirection: 'row',
+        justifyContent: 'center',
+        pointerFilter: 'none'
+      }}
+    >
+      <UiEntity
+        uiTransform={{ flexDirection: 'row', alignItems: 'center', padding: 6 }}
+        uiBackground={{ color: PANEL_BG }}
+      >
+        {ACTIONS.map((action) => actionButton(action))}
+        {modeToggle()}
+        {toolbarDivider('div-parent')}
+        {parentButton()}
+        {clearParentButton()}
+        {toolbarDivider('div-view')}
+        {nodeDisplayButton()}
+        {linksButton()}
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Confirm dialog shown when the parenting target has a non-uniform world scale,
 // since the reparented children's world placement can't be preserved.
 function parentDialog(): ReactEcs.JSX.Element | null {
@@ -1187,6 +1251,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {relationsPanel() ?? []}
       {overlayUi() ?? []}
       {gizmoPanel() ?? []}
+      {controlPanel()}
       <UiEntity
         uiTransform={{
           width: 480,
@@ -1249,38 +1314,26 @@ export function inspectorUi(): ReactEcs.JSX.Element {
             }}
           />
         </UiEntity>
-        {/* Actions bar: overlay actions (left) + transport controls (right) */}
+        {/* Transport controls (mode/parenting/display live in the top toolbar) */}
         <UiEntity
           uiTransform={{
             width: '100%',
             height: 24,
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-end',
             margin: { top: 4 }
           }}
         >
-          <UiEntity
-            uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
-          >
-            {ACTIONS.map((action) => actionButton(action))}
-            {modeToggle()}
-            {parentButton()}
-            {clearParentButton()}
-          </UiEntity>
-          <UiEntity
-            uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
-          >
-            {pbButton('Pause', state.status === 'ready' && !state.frozen, () => {
-              pauseScene().catch(console.error)
-            })}
-            {pbButton('Step', state.status === 'ready' && state.frozen, () => {
-              stepScene().catch(console.error)
-            })}
-            {pbButton('Play', state.status === 'ready' && state.frozen, () => {
-              playScene().catch(console.error)
-            })}
-          </UiEntity>
+          {pbButton('Pause', state.status === 'ready' && !state.frozen, () => {
+            pauseScene().catch(console.error)
+          })}
+          {pbButton('Step', state.status === 'ready' && state.frozen, () => {
+            stepScene().catch(console.error)
+          })}
+          {pbButton('Play', state.status === 'ready' && state.frozen, () => {
+            playScene().catch(console.error)
+          })}
         </UiEntity>
       </UiEntity>
 
