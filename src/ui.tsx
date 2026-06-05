@@ -35,6 +35,8 @@ import {
   deleteEntityRecursive,
   deleteEntityReparent,
   reparentSelectionToActive,
+  clearParentOfSelection,
+  selectionHasParented,
   childIdsOf
 } from './inspector'
 import {
@@ -931,6 +933,28 @@ function parentButton(): ReactEcs.JSX.Element {
   )
 }
 
+// Detach the selection to root. Enabled when something selected is parented.
+function clearParentButton(): ReactEcs.JSX.Element {
+  const enabled = state.selected.size >= 1 && selectionHasParented()
+  return (
+    <UiEntity
+      key="clear-parent-button"
+      uiTransform={{
+        width: 96,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: enabled ? BUTTON_BG : REVERT_BG }}
+      uiText={{ value: 'Clear Parent', fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
+      onMouseDown={() => {
+        if (enabled) clearParentOfSelection().catch(console.error)
+      }}
+    />
+  )
+}
+
 // Confirm dialog shown when the parenting target has a non-uniform world scale,
 // since the reparented children's world placement can't be preserved.
 function parentDialog(): ReactEcs.JSX.Element | null {
@@ -1242,6 +1266,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
             {ACTIONS.map((action) => actionButton(action))}
             {modeToggle()}
             {parentButton()}
+            {clearParentButton()}
           </UiEntity>
           <UiEntity
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}

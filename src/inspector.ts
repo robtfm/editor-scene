@@ -303,6 +303,33 @@ export async function reparentSelectionToActive(): Promise<void> {
   await reloadAfter()
 }
 
+// Detach each selected entity to the scene root (parent 0), preserving world
+// placement. Entities already at root are skipped. The new parent (root) is
+// always uniform, so this is exact except for a child that was sheared under a
+// non-uniformly-scaled parent — which can't keep its shape outside it anyway.
+export async function clearParentOfSelection(): Promise<void> {
+  const snap = state.snapshot
+  const targets = [...state.selected].filter((id) => (readTransform(id).parent ?? 0) !== 0)
+  for (const id of targets) {
+    const local = localRelativeTo(snap, id, '0')
+    const json = JSON.stringify({ ...local, parent: 0 })
+    try {
+      await BevyApi.consoleCommand('set_component', [id, 'Transform', json])
+    } catch (e) {
+      console.error('clear parent failed:', id, e)
+    }
+  }
+  await reloadAfter()
+}
+
+// Whether any selected entity currently has a non-root parent.
+export function selectionHasParented(): boolean {
+  for (const id of state.selected) {
+    if ((readTransform(id).parent ?? 0) !== 0) return true
+  }
+  return false
+}
+
 // Apply structured-editor edits: rebuild the JSON from the snapshot value shape
 // + per-field edits, then write it.
 export async function applyStructuredEdits(
