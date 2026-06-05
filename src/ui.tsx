@@ -756,14 +756,18 @@ function treeBody(): ReactEcs.JSX.Element[] {
 const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'select', label: 'Select' },
   { id: 'translate', label: 'Translate' },
-  { id: 'rotate', label: 'Rotate' }
+  { id: 'rotate', label: 'Rotate' },
+  { id: 'scale', label: 'Scale' }
 ]
 
 // Fullscreen panel showing the gizmo camera's render (composited on top of the
 // world). Pointer-transparent for now; the drag handler comes with interaction.
 function gizmoPanel(): ReactEcs.JSX.Element | null {
   const mode = state.activeAction
-  if ((mode !== 'translate' && mode !== 'rotate') || state.selectedEntity === null) {
+  if (
+    (mode !== 'translate' && mode !== 'rotate' && mode !== 'scale') ||
+    state.selectedEntity === null
+  ) {
     return null
   }
   const cam = gizmoCameraEntity()
@@ -771,6 +775,11 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
   // Capture the pointer only when a handle is hovered or a drag is in progress,
   // so clicks pass through to the world otherwise.
   const capture = state.gizmoHover !== null || state.gizmoDragging
+  // For scale handles, registering onMouseDragLocked makes the engine pointer-
+  // lock for the drag (the cursor stays put); scale reads screenDelta, which
+  // keeps flowing while locked. Translate/rotate must NOT lock — they track the
+  // absolute world ray, which pins to screen-centre under lock.
+  const lockScale = state.gizmoHover !== null && state.gizmoHover[0] === 's'
   return (
     <UiEntity
       uiTransform={{
@@ -790,6 +799,7 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
       onMouseUp={() => {
         endGizmoDrag()
       }}
+      onMouseDragLocked={lockScale ? () => {} : undefined}
     />
   )
 }

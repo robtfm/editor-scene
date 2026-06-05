@@ -15,7 +15,7 @@ import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
 import { state } from './state'
 import { worldTransformOf, worldToLocalPosition, worldToLocalRotation } from './world-pos'
 import { rotateVec3ByQuat } from './perspective-to-screen'
-import { cameraFovY } from './camera-projection'
+import { cameraFovY, projectWorldToScreen } from './camera-projection'
 import { fireTransform, syncAfterDrag } from './inspector'
 
 // A render layer that only the gizmo camera draws, so gizmo meshes render
@@ -23,15 +23,20 @@ import { fireTransform, syncAfterDrag } from './inspector'
 export const GIZMO_LAYER = 4
 
 type Axis = 'x' | 'y' | 'z'
-type HandleId = 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz' | 'rx' | 'ry' | 'rz'
-type Mode = 'translate' | 'rotate'
-type Kind = 'arrow' | 'plane' | 'ring'
+type HandleId =
+  | 'x' | 'y' | 'z'
+  | 'xy' | 'xz' | 'yz'
+  | 'rx' | 'ry' | 'rz'
+  | 'sx' | 'sy' | 'sz' | 'sc'
+type Mode = 'translate' | 'rotate' | 'scale'
+type Kind = 'arrow' | 'plane' | 'ring' | 'box'
 
 const AXIS_COLOR: Record<Axis, Color4> = {
   x: Color4.create(0.92, 0.25, 0.25, 1),
   y: Color4.create(0.3, 0.85, 0.3, 1),
   z: Color4.create(0.3, 0.5, 1, 1)
 }
+const CENTER_COLOR = Color4.create(0.85, 0.85, 0.85, 1)
 const PLANE_COLOR: Record<'xy' | 'xz' | 'yz', Color4> = {
   xy: Color4.create(0.9, 0.85, 0.2, 1),
   xz: Color4.create(0.9, 0.3, 0.9, 1),
@@ -48,6 +53,7 @@ let gizmoCamera: Entity | null = null
 let gizmoRoot: Entity | null = null
 let translateGroup: Entity | null = null
 let rotateGroup: Entity | null = null
+let scaleGroup: Entity | null = null
 let lastHover: string | null = '__init__'
 let lastMode: Mode | null = null
 
@@ -65,6 +71,7 @@ function activeMode(): Mode | null {
   if (state.selectedEntity === null) return null
   if (state.activeAction === 'translate') return 'translate'
   if (state.activeAction === 'rotate') return 'rotate'
+  if (state.activeAction === 'scale') return 'scale'
   return null
 }
 
@@ -244,6 +251,48 @@ function makeArc(parent: Entity, axis: Axis): void {
   handles.set(`r${axis}` as HandleId, { parts, color })
 }
 
+const SCALE_ARM = 0.82 // stalk length to the box cap, in gizmo-local units
+
+// A per-axis scale handle: a thin stalk ending in a small box cap.
+function makeScaleHandle(parent: Entity, axis: Axis): void {
+  const rot = axisRotation(axis)
+  const color = AXIS_COLOR[axis]
+  const len = SCALE_ARM - 0.1
+
+  const shaft = engine.addEntity()
+  Transform.create(shaft, {
+    parent,
+    position: along(axis, len / 2),
+    rotation: rot,
+    scale: Vector3.create(0.06, len, 0.06)
+  })
+  MeshRenderer.setCylinder(shaft, 0.5, 0.5)
+
+  const cap = engine.addEntity()
+  Transform.create(cap, {
+    parent,
+    position: along(axis, SCALE_ARM),
+    scale: Vector3.create(0.16, 0.16, 0.16)
+  })
+  MeshRenderer.setBox(cap)
+
+  handles.set(`s${axis}` as HandleId, {
+    parts: [
+      { e: shaft, kind: 'box' },
+      { e: cap, kind: 'box' }
+    ],
+    color
+  })
+}
+
+// The central box: a uniform-scale handle.
+function makeScaleCenter(parent: Entity): void {
+  const box = engine.addEntity()
+  Transform.create(box, { parent, scale: Vector3.create(0.16, 0.16, 0.16) })
+  MeshRenderer.setBox(box)
+  handles.set('sc', { parts: [{ e: box, kind: 'box' }], color: CENTER_COLOR })
+}
+
 // Render resolution for the gizmo texture: track the canvas aspect, capped.
 function textureSize(w: number, h: number): { width: number; height: number } {
   const scale = Math.min(1, 1600 / Math.max(w, h))
@@ -301,18 +350,30 @@ export function setupGizmo(): void {
   makeArc(rg, 'z')
   rotateGroup = rg
 
+  const sg = engine.addEntity()
+  Transform.create(sg, { parent: root })
+  VisibilityComponent.create(sg, { visible: false, propagateToChildren: true })
+  makeScaleHandle(sg, 'x')
+  makeScaleHandle(sg, 'y')
+  makeScaleHandle(sg, 'z')
+  makeScaleCenter(sg)
+  scaleGroup = sg
+
   gizmoRoot = root
   applyHighlight(null) // all dim to start
 
   engine.addSystem(updateGizmo)
 }
 
-// Show the handle group for `mode`, hide the other (only on change).
+// Show the handle group for `mode`, hide the others (only on change).
 function showGroup(mode: Mode): void {
-  if (mode === lastMode || translateGroup === null || rotateGroup === null) return
+  if (mode === lastMode || translateGroup === null || rotateGroup === null || scaleGroup === null) {
+    return
+  }
   lastMode = mode
   VisibilityComponent.getMutable(translateGroup).visible = mode === 'translate'
   VisibilityComponent.getMutable(rotateGroup).visible = mode === 'rotate'
+  VisibilityComponent.getMutable(scaleGroup).visible = mode === 'scale'
 }
 
 // --- ray pick ---
@@ -432,6 +493,36 @@ function pickRotate(
   return best
 }
 
+// Pick a scale handle: the centre box first (uniform), then the nearest axis
+// stalk within a threshold.
+function pickScale(
+  origin: Vector3,
+  rotation: Quaternion,
+  s: number,
+  rayO: Vector3,
+  rayD: Vector3
+): HandleId | null {
+  // centre box: closest approach of the ray to the gizmo origin
+  const w0 = Vector3.subtract(origin, rayO)
+  const proj = Vector3.dot(w0, rayD)
+  const closest = Vector3.add(rayO, Vector3.scale(rayD, proj))
+  if (proj > 0 && Vector3.distance(closest, origin) < 0.12 * s) return 'sc'
+
+  const dir = axisDirs(rotation)
+  const arm = SCALE_ARM * s
+  let bestAxis: HandleId | null = null
+  let bestDist = 0.18 * s
+  for (const axis of ['x', 'y', 'z'] as Axis[]) {
+    const b = Vector3.add(origin, Vector3.scale(dir[axis], arm))
+    const d = rayToSegmentDist(rayO, rayD, origin, b)
+    if (d < bestDist) {
+      bestDist = d
+      bestAxis = `s${axis}` as HandleId
+    }
+  }
+  return bestAxis
+}
+
 // The world-space pointer ray (origin = primary camera, dir = pointer info).
 function pointerRay(): { o: Vector3; d: Vector3 } | null {
   const ptr = PrimaryPointerInfo.getOrNull(engine.RootEntity)
@@ -442,6 +533,20 @@ function pointerRay(): { o: Vector3; d: Vector3 } | null {
     o: { ...camT.position },
     d: Vector3.normalize(Vector3.create(dir.x, dir.y, dir.z))
   }
+}
+
+// Screen-space (pixel) direction the axis points, from the gizmo origin. Used
+// to project relative pointer motion onto an axis for delta-driven scaling.
+// Falls back to horizontal if the axis can't be projected (e.g. near-parallel).
+function handleScreenDir(origin: Vector3, axisDir: Vector3): { x: number; y: number } {
+  const a = projectWorldToScreen(origin)
+  const b = projectWorldToScreen(Vector3.add(origin, Vector3.scale(axisDir, 0.5)))
+  if (a === null || b === null) return { x: 1, y: 0 }
+  const dx = b.left - a.left
+  const dy = b.top - a.top
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-3) return { x: 1, y: 0 }
+  return { x: dx / len, y: dy / len }
 }
 
 // Parameter t on the line a + t*u closest to the ray (u assumed unit).
@@ -499,7 +604,7 @@ type Local = { x: number; y: number; z: number }
 type LocalRot = { x: number; y: number; z: number; w: number }
 
 type DragState = {
-  kind: 'translate-axis' | 'translate-plane' | 'rotate'
+  kind: 'translate-axis' | 'translate-plane' | 'rotate' | 'scale-axis' | 'scale-uniform'
   startWorld: Vector3
   startRot: Quaternion
   // held local fields (the ones this drag does not change)
@@ -507,7 +612,7 @@ type DragState = {
   rotation: LocalRot
   scale: Local
   parent: number
-  // translate-axis
+  // translate-axis / scale-axis
   axisDir?: Vector3
   grabT?: number
   // translate-plane
@@ -518,7 +623,15 @@ type DragState = {
   rotU?: Vector3
   rotV?: Vector3
   rotAngle0?: number
+  // scale (axis + uniform): screen-space drag direction + accumulated pixels.
+  // Scale is driven by relative pointer delta, not an absolute ray, so the
+  // cursor's position doesn't matter (and it works when the pointer is locked).
+  scaleAxis?: Axis
+  screenDir?: { x: number; y: number }
+  accumPx?: number
 }
+
+const SCALE_PX_PER_DOUBLING = 220
 
 let drag: DragState | null = null
 // Last committed drag pose, held briefly after release so the gizmo doesn't snap
@@ -564,6 +677,21 @@ export function startGizmoDrag(): void {
       rotV: v,
       rotAngle0: Math.atan2(Vector3.dot(rel, v), Vector3.dot(rel, u))
     }
+  } else if (handle[0] === 's') {
+    if (handle === 'sc') {
+      // uniform: drag up / right to grow (screen +y is down, so dir.y is -)
+      drag = { ...base, kind: 'scale-uniform', screenDir: { x: 0.707, y: -0.707 }, accumPx: 0 }
+    } else {
+      const axis = handle[1] as Axis
+      const axisDir = Vector3.normalize(rotateVec3ByQuat(unit(axis), wt.rotation))
+      drag = {
+        ...base,
+        kind: 'scale-axis',
+        scaleAxis: axis,
+        screenDir: handleScreenDir(wt.position, axisDir),
+        accumPx: 0
+      }
+    }
   } else if (handle.length === 1) {
     const axisDir = Vector3.normalize(rotateVec3ByQuat(unit(handle as Axis), wt.rotation))
     drag = {
@@ -597,9 +725,47 @@ export function endGizmoDrag(): void {
 
 function updateDrag(camT: { position: Vector3 }): void {
   if (drag === null || state.selectedEntity === null) return
+  const id = state.selectedEntity
+
+  if (drag.kind === 'scale-axis' || drag.kind === 'scale-uniform') {
+    // Accumulate relative pointer motion along the handle's screen direction;
+    // the cursor's absolute position is irrelevant (works when locked, too).
+    const ptr = PrimaryPointerInfo.getOrNull(engine.RootEntity)
+    const delta = ptr?.screenDelta
+    const dir = drag.screenDir as { x: number; y: number }
+    if (delta !== undefined) {
+      drag.accumPx = (drag.accumPx as number) + (delta.x * dir.x + delta.y * dir.y)
+    }
+    const factor = Math.pow(2, (drag.accumPx as number) / SCALE_PX_PER_DOUBLING)
+    let newScale: Local
+    if (drag.kind === 'scale-axis') {
+      const axis = drag.scaleAxis as Axis
+      newScale = { ...drag.scale, [axis]: drag.scale[axis] * factor }
+    } else {
+      newScale = {
+        x: drag.scale.x * factor,
+        y: drag.scale.y * factor,
+        z: drag.scale.z * factor
+      }
+    }
+    // scale leaves world position/rotation put, so the gizmo doesn't move
+    lastDragWorld = drag.startWorld
+    lastDragRot = drag.startRot
+    setGizmoTransform(drag.startWorld, drag.startRot, scaleFor(drag.startWorld, camT.position))
+    fireTransform(
+      id,
+      JSON.stringify({
+        position: drag.position,
+        rotation: drag.rotation,
+        scale: newScale,
+        parent: drag.parent
+      })
+    )
+    return
+  }
+
   const ray = pointerRay()
   if (ray === null) return
-  const id = state.selectedEntity
 
   if (drag.kind === 'rotate') {
     const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.rotNormal as Vector3)
@@ -681,7 +847,9 @@ function updateGizmo(dt: number): void {
   const mode: Mode = dragging
     ? (drag as DragState).kind === 'rotate'
       ? 'rotate'
-      : 'translate'
+      : (drag as DragState).kind.startsWith('scale')
+        ? 'scale'
+        : 'translate'
     : (activeMode() as Mode)
   showGroup(mode)
 
@@ -719,7 +887,9 @@ function updateGizmo(dt: number): void {
     const hover =
       mode === 'rotate'
         ? pickRotate(pos, rot, s, ray.o, ray.d)
-        : pickTranslate(pos, rot, s, ray.o, ray.d)
+        : mode === 'scale'
+          ? pickScale(pos, rot, s, ray.o, ray.d)
+          : pickTranslate(pos, rot, s, ray.o, ray.d)
     state.gizmoHover = hover
     applyHighlight(hover)
   }
