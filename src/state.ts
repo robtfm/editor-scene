@@ -55,6 +55,10 @@ export const state = {
   // rotate/scale pivot: false = around the active entity (orbits positions),
   // true = each item about its own origin (positions unchanged).
   pivotEach: false,
+  // in-progress marker drag-box (screen px). add = shift, remove = ctrl.
+  selectBox: null as
+    | { startX: number; startY: number; curX: number; curY: number; add: boolean; remove: boolean }
+    | null,
   // gizmo handle currently under the pointer: translate 'x'|'y'|'z'|'xy'|'xz'|
   // 'yz', rotate 'rx'|'ry'|'rz', or null
   gizmoHover: null as string | null,
@@ -117,6 +121,23 @@ export function selectionClick(id: string, additive: boolean, toggle: boolean): 
   }
   state.selected.add(id)
   state.activeEntity = id
+}
+
+// Apply a drag-box result: `remove` (ctrl) unselects the boxed entities,
+// `add` (shift) adds them, neither replaces the selection with them.
+export function applyBoxSelection(ids: string[], add: boolean, remove: boolean): void {
+  if (remove) {
+    for (const id of ids) state.selected.delete(id)
+  } else {
+    if (!add) state.selected.clear()
+    for (const id of ids) state.selected.add(id)
+    if (ids.length > 0) state.activeEntity = ids[ids.length - 1]
+  }
+  if (state.activeEntity === null || !state.selected.has(state.activeEntity)) {
+    let last: string | null = null
+    for (const v of state.selected) last = v
+    state.activeEntity = last
+  }
 }
 
 // Selected entities with no selected ancestor — the set a group transform should

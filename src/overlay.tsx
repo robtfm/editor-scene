@@ -1,7 +1,13 @@
 import ReactEcs, { UiEntity } from '@dcl/sdk/react-ecs'
-import { inputSystem, InputAction } from '@dcl/sdk/ecs'
+import { engine, inputSystem, InputAction, PrimaryPointerInfo } from '@dcl/sdk/ecs'
 import { Color4 } from '@dcl/sdk/math'
-import { state, selectEntityInTree, selectionClick, entityLabel } from './state'
+import {
+  state,
+  selectEntityInTree,
+  selectionClick,
+  applyBoxSelection,
+  entityLabel
+} from './state'
 import { computeWorldPositions, shouldMark } from './world-pos'
 import { projectWorldToScreen } from './camera-projection'
 
@@ -11,6 +17,12 @@ const MARKER_HOVER = Color4.create(1, 0.85, 0.3, 1)
 const MARKER_SELECTED = Color4.create(0.35, 0.9, 0.45, 1)
 const MARKER_ACTIVE = Color4.create(1, 0.6, 0.2, 1)
 const TIP_BG = Color4.create(0, 0, 0, 0.8)
+const BOX_ADD = Color4.create(0.35, 0.9, 0.45, 1)
+const BOX_REMOVE = Color4.create(1, 0.4, 0.35, 1)
+const BOX_REPLACE = Color4.create(0.4, 0.7, 1, 1)
+
+// Screen positions (px) of the markers as last rendered, for box hit-testing.
+const lastMarkers = new Map<string, { x: number; y: number }>()
 
 // In the scene, IaModifier is shift and IaWalk is ctrl.
 function clickModifiers(): { shift: boolean; ctrl: boolean } {
@@ -18,6 +30,92 @@ function clickModifiers(): { shift: boolean; ctrl: boolean } {
     shift: inputSystem.isPressed(InputAction.IA_MODIFIER),
     ctrl: inputSystem.isPressed(InputAction.IA_WALK)
   }
+}
+
+function pointerXY(): { x: number; y: number } | null {
+  const p = PrimaryPointerInfo.getOrNull(engine.RootEntity)?.screenCoordinates
+  return p === undefined ? null : { x: p.x, y: p.y }
+}
+
+// Commit the drag-box and clear it. Idempotent (no-op once cleared).
+function finishBox(): void {
+  const box = state.selectBox
+  if (box === null) return
+  const minX = Math.min(box.startX, box.curX)
+  const maxX = Math.max(box.startX, box.curX)
+  const minY = Math.min(box.startY, box.curY)
+  const maxY = Math.max(box.startY, box.curY)
+  const ids: string[] = []
+  for (const [id, p] of lastMarkers) {
+    if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) ids.push(id)
+  }
+  applyBoxSelection(ids, box.add, box.remove)
+  state.selectBox = null
+}
+
+// Drive the drag-box from the live pointer-pressed state rather than UI up/drag
+// events: those are missed when the release lands on a marker (which renders on
+// top of the surface), wedging the box. onMouseDown still starts it (so we know
+// the press began on empty space); this updates and finalizes it.
+export function startSelectBox(): void {
+  engine.addSystem(() => {
+    const box = state.selectBox
+    if (box === null) return
+    if (inputSystem.isPressed(InputAction.IA_POINTER)) {
+      const xy = pointerXY()
+      if (xy !== null) {
+        box.curX = xy.x
+        box.curY = xy.y
+      }
+    } else {
+      finishBox()
+    }
+  })
+}
+
+// A full-screen surface (behind the markers) that turns empty-space drags into a
+// box-select. The markers, rendered on top, still take their own clicks.
+function boxSurface(): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key="box-surface"
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        pointerFilter: 'block'
+      }}
+      onMouseDown={() => {
+        const xy = pointerXY()
+        if (xy === null) return
+        const { shift, ctrl } = clickModifiers()
+        state.selectBox = { startX: xy.x, startY: xy.y, curX: xy.x, curY: xy.y, add: shift, remove: ctrl }
+      }}
+    />
+  )
+}
+
+// The rubber-band rectangle while a drag-box is in progress.
+function selectionBox(): ReactEcs.JSX.Element | [] {
+  const b = state.selectBox
+  if (b === null) return []
+  const color = b.remove ? BOX_REMOVE : b.add ? BOX_ADD : BOX_REPLACE
+  return (
+    <UiEntity
+      key="selbox"
+      uiTransform={{
+        positionType: 'absolute',
+        position: { left: Math.min(b.startX, b.curX), top: Math.min(b.startY, b.curY) },
+        width: Math.abs(b.curX - b.startX),
+        height: Math.abs(b.curY - b.startY),
+        borderWidth: 1,
+        borderColor: color,
+        pointerFilter: 'none'
+      }}
+      uiBackground={{ color: { ...color, a: 0.15 } }}
+    />
+  )
 }
 
 // Tooltip rendered as a top-level overlay child (not a child of the tiny
@@ -100,10 +198,12 @@ export function overlayUi(): ReactEcs.JSX.Element | null {
 
   const markers: ReactEcs.JSX.Element[] = []
   let hoveredTip: ReactEcs.JSX.Element | null = null
+  lastMarkers.clear()
   for (const [id, world] of worldPositions) {
     if (!shouldMark(state.snapshot, id)) continue
     const screen = projectWorldToScreen(world)
     if (screen === null || !screen.onScreen) continue
+    lastMarkers.set(id, { x: screen.left, y: screen.top })
     const hovered = state.hoveredOverlay === id
     markers.push(marker(id, screen.left, screen.top, hovered))
     if (hovered) hoveredTip = tooltip(id, screen.left, screen.top)
@@ -119,7 +219,9 @@ export function overlayUi(): ReactEcs.JSX.Element | null {
         pointerFilter: 'none'
       }}
     >
+      {boxSurface()}
       {markers}
+      {selectionBox()}
       {hoveredTip ?? []}
     </UiEntity>
   )

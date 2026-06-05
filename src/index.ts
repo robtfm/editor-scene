@@ -3,6 +3,7 @@ import { inspectorUi } from './ui'
 import { startInspector } from './inspector'
 import { startCameraProjection } from './camera-projection'
 import { setupGizmo } from './gizmo'
+import { startSelectBox } from './overlay'
 
 export function main(): void {
   const _log = console.log
@@ -12,6 +13,7 @@ export function main(): void {
 
   startCameraProjection()
   setupGizmo()
+  startSelectBox()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {
