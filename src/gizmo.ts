@@ -51,8 +51,9 @@ let rotateGroup: Entity | null = null
 let lastHover: string | null = '__init__'
 let lastMode: Mode | null = null
 
-// handle id -> its meshes + base colour + kind (for re-materialing on hover)
-const handles = new Map<HandleId, { entities: Entity[]; color: Color4; kind: Kind }>()
+// handle id -> its meshes (each tagged with how to material it) + base colour
+type Part = { e: Entity; kind: Kind }
+const handles = new Map<HandleId, { parts: Part[]; color: Color4 }>()
 
 export function gizmoCameraEntity(): Entity | null {
   return gizmoCamera
@@ -98,7 +99,7 @@ function applyHighlight(hover: string | null): void {
   lastHover = hover
   for (const [id, h] of handles) {
     const hl = id === hover
-    for (const e of h.entities) setHandleMaterial(e, h.color, h.kind, hl)
+    for (const p of h.parts) setHandleMaterial(p.e, h.color, p.kind, hl)
   }
 }
 
@@ -150,7 +151,13 @@ function makeArrow(parent: Entity, axis: Axis): void {
   })
   MeshRenderer.setCylinder(head, 0.5, 0) // cone: wide base, zero-radius tip
 
-  handles.set(axis, { entities: [shaft, head], color, kind: 'arrow' })
+  handles.set(axis, {
+    parts: [
+      { e: shaft, kind: 'arrow' },
+      { e: head, kind: 'arrow' }
+    ],
+    color
+  })
 }
 
 function makePlane(parent: Entity, plane: 'xy' | 'xz' | 'yz'): void {
@@ -169,7 +176,7 @@ function makePlane(parent: Entity, plane: 'xy' | 'xz' | 'yz'): void {
     scale: Vector3.create(0.28, 0.28, 1)
   })
   MeshRenderer.setPlane(quad)
-  handles.set(plane, { entities: [quad], color: PLANE_COLOR[plane], kind: 'plane' })
+  handles.set(plane, { parts: [{ e: quad, kind: 'plane' }], color: PLANE_COLOR[plane] })
 }
 
 // Orientation taking the ring's local +Z (its plane normal) onto `axis`.
@@ -181,19 +188,35 @@ function ringOrientation(axis: Axis): Quaternion {
       : Quaternion.Identity()
 }
 
-// A rotation ring around `axis`: a circle of thin box segments in the ring's
-// local XY plane, the whole ring oriented so its normal points along the axis.
-function makeRing(parent: Entity, axis: Axis): void {
+// In-plane basis (gizmo-local) of each ring's drawn quarter: the first quadrant
+// of its local XY frame after ringOrientation. Used to gate picking to the arc.
+const RING_UV: Record<Axis, { u: Vector3; v: Vector3 }> = {
+  x: { u: Vector3.create(0, 0, -1), v: Vector3.create(0, 1, 0) },
+  y: { u: Vector3.create(1, 0, 0), v: Vector3.create(0, 0, -1) },
+  z: { u: Vector3.create(1, 0, 0), v: Vector3.create(0, 1, 0) }
+}
+
+const ARC_START = -10 // local degrees; arc overshoots the quadrant a little so
+const ARC_SPAN = 110 //  adjacent axes' rims don't look joined at the axis lines
+const DISC_FRAC = 0.34 // fill disc radius as a fraction of the rim radius (66% inset)
+
+// A rotation handle around `axis`: an arc of thin box segments (the bright
+// pickable rim) backed by a translucent disc (a single flat cylinder, inset
+// from the rim), the whole thing oriented so its normal points along the axis.
+// A solid disc avoids the z-fighting/gaps a quad-tessellated sector would have
+// (there is no triangle primitive to fill a true sector cleanly).
+function makeArc(parent: Entity, axis: Axis): void {
   const ring = engine.addEntity()
   Transform.create(ring, { parent, rotation: ringOrientation(axis) })
-
-  const segs = 32
-  const segLen = ((2 * Math.PI * RING_R) / segs) * 1.15
-  const thick = 0.045
   const color = AXIS_COLOR[axis]
-  const entities: Entity[] = []
+  const parts: Part[] = []
+
+  // arc rim: box segments spanning ARC_SPAN degrees
+  const segs = 12
+  const segLen = (((ARC_SPAN * Math.PI) / 180) * RING_R) / segs / 0.84
+  const thick = 0.045
   for (let i = 0; i < segs; i++) {
-    const deg = (360 / segs) * i
+    const deg = ARC_START + (ARC_SPAN / segs) * (i + 0.5)
     const rad = (deg * Math.PI) / 180
     const seg = engine.addEntity()
     Transform.create(seg, {
@@ -203,9 +226,22 @@ function makeRing(parent: Entity, axis: Axis): void {
       scale: Vector3.create(segLen, thick, thick)
     })
     MeshRenderer.setBox(seg)
-    entities.push(seg)
+    parts.push({ e: seg, kind: 'ring' })
   }
-  handles.set(`r${axis}` as HandleId, { entities, color, kind: 'ring' })
+
+  // fill: a flat disc inset from the rim. A unit cylinder's axis is +Y, so
+  // rotate it onto the ring's local +Z to lay the disc in the ring plane.
+  const disc = engine.addEntity()
+  const d = 2 * DISC_FRAC * RING_R
+  Transform.create(disc, {
+    parent: ring,
+    rotation: Quaternion.fromEulerDegrees(90, 0, 0),
+    scale: Vector3.create(d, 0.004, d)
+  })
+  MeshRenderer.setCylinder(disc, 0.5, 0.5)
+  parts.push({ e: disc, kind: 'plane' })
+
+  handles.set(`r${axis}` as HandleId, { parts, color })
 }
 
 // Render resolution for the gizmo texture: track the canvas aspect, capped.
@@ -260,9 +296,9 @@ export function setupGizmo(): void {
   const rg = engine.addEntity()
   Transform.create(rg, { parent: root })
   VisibilityComponent.create(rg, { visible: false, propagateToChildren: true })
-  makeRing(rg, 'x')
-  makeRing(rg, 'y')
-  makeRing(rg, 'z')
+  makeArc(rg, 'x')
+  makeArc(rg, 'y')
+  makeArc(rg, 'z')
   rotateGroup = rg
 
   gizmoRoot = root
@@ -382,12 +418,16 @@ function pickRotate(
     const denom = Vector3.dot(rayD, n)
     if (Math.abs(denom) < 1e-4) continue
     const t = Vector3.dot(Vector3.subtract(origin, rayO), n) / denom
-    if (t < 0) continue
+    if (t < 0 || t >= bestT) continue
     const hit = Vector3.add(rayO, Vector3.scale(rayD, t))
-    if (Math.abs(Vector3.distance(hit, origin) - R) <= band && t < bestT) {
-      bestT = t
-      best = `r${axis}` as HandleId
-    }
+    const rel = Vector3.subtract(hit, origin)
+    if (Math.abs(Vector3.length(rel) - R) > band) continue
+    // only the drawn quarter is pickable: first quadrant of the ring's u/v frame
+    const uWorld = Vector3.normalize(rotateVec3ByQuat(RING_UV[axis].u, rotation))
+    const vWorld = Vector3.normalize(rotateVec3ByQuat(RING_UV[axis].v, rotation))
+    if (Vector3.dot(rel, uWorld) < -0.02 * s || Vector3.dot(rel, vWorld) < -0.02 * s) continue
+    bestT = t
+    best = `r${axis}` as HandleId
   }
   return best
 }
