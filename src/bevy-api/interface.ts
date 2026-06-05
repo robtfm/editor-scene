@@ -24,4 +24,11 @@ export type BevyApiInterface = {
   // response channel. `cmd` is the command name without the leading slash.
   // Resolves with the reply string on success, rejects with the failure message.
   consoleCommand: (cmd: string, args?: string[]) => Promise<string>
+
+  // Subscribe to the system action stream (super-user scenes only). Yields
+  // `{ action, pressed }` events; `action` is the SystemAction variant name
+  // (e.g. 'CameraLock', bound to right-click). Returns an async-iterable.
+  getSystemActionStream: () => Promise<
+    AsyncIterable<{ action: string; pressed: boolean }>
+  >
 }
