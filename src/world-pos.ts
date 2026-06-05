@@ -135,6 +135,24 @@ export function worldToLocalPosition(
   }
 }
 
+// The local Transform.rotation that gives the entity world rotation `world`
+// (inverse of the composed rotation): local = parentWorldRot⁻¹ · world.
+export function worldToLocalRotation(
+  snapshot: Snapshot,
+  id: string,
+  world: Quaternion
+): Quaternion | null {
+  if (!('5' in snapshot)) return null
+  const cache = new Map<string, Trs>()
+  const parentId = String(readTransform(snapshot, id).parent ?? 0)
+  const parentRot =
+    parentId === '0' || !(parentId in snapshot)
+      ? Quaternion.Identity()
+      : composed(snapshot, parentId, cache, new Set()).rot
+  const inv = Quaternion.create(-parentRot.x, -parentRot.y, -parentRot.z, parentRot.w)
+  return Quaternion.multiply(inv, world)
+}
+
 function isZeroOffset(t: TransformValue): boolean {
   const p = t.position
   if (p === undefined) return true

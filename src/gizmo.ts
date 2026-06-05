@@ -3,6 +3,7 @@ import {
   Transform,
   MeshRenderer,
   Material,
+  VisibilityComponent,
   TextureCamera,
   CameraLayer,
   CameraLayers,
@@ -12,7 +13,7 @@ import {
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
 import { state } from './state'
-import { worldTransformOf, worldToLocalPosition } from './world-pos'
+import { worldTransformOf, worldToLocalPosition, worldToLocalRotation } from './world-pos'
 import { rotateVec3ByQuat } from './perspective-to-screen'
 import { cameraFovY } from './camera-projection'
 import { fireTransform, syncAfterDrag } from './inspector'
@@ -21,9 +22,12 @@ import { fireTransform, syncAfterDrag } from './inspector'
 // isolated from (and composited on top of) the world.
 export const GIZMO_LAYER = 4
 
-type HandleId = 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz'
+type Axis = 'x' | 'y' | 'z'
+type HandleId = 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz' | 'rx' | 'ry' | 'rz'
+type Mode = 'translate' | 'rotate'
+type Kind = 'arrow' | 'plane' | 'ring'
 
-const AXIS_COLOR: Record<'x' | 'y' | 'z', Color4> = {
+const AXIS_COLOR: Record<Axis, Color4> = {
   x: Color4.create(0.92, 0.25, 0.25, 1),
   y: Color4.create(0.3, 0.85, 0.3, 1),
   z: Color4.create(0.3, 0.5, 1, 1)
@@ -39,49 +43,52 @@ const PLANES: Array<{ id: 'xy' | 'xz' | 'yz'; a1: Axis; a2: Axis; n: Axis }> = [
   { id: 'xz', a1: 'x', a2: 'z', n: 'y' },
   { id: 'yz', a1: 'y', a2: 'z', n: 'x' }
 ]
-type Axis = 'x' | 'y' | 'z'
 
 let gizmoCamera: Entity | null = null
 let gizmoRoot: Entity | null = null
+let translateGroup: Entity | null = null
+let rotateGroup: Entity | null = null
 let lastHover: string | null = '__init__'
+let lastMode: Mode | null = null
 
 // handle id -> its meshes + base colour + kind (for re-materialing on hover)
-const handles = new Map<
-  HandleId,
-  { entities: Entity[]; color: Color4; kind: 'arrow' | 'plane' }
->()
+const handles = new Map<HandleId, { entities: Entity[]; color: Color4; kind: Kind }>()
 
 export function gizmoCameraEntity(): Entity | null {
   return gizmoCamera
 }
 
+// Which transform mode the gizmo is in (translate/rotate), or null when no
+// transform action is active or nothing is selected.
+function activeMode(): Mode | null {
+  if (state.selectedEntity === null) return null
+  if (state.activeAction === 'translate') return 'translate'
+  if (state.activeAction === 'rotate') return 'rotate'
+  return null
+}
+
 function gizmoActive(): boolean {
-  return state.activeAction === 'translate' && state.selectedEntity !== null
+  return activeMode() !== null
 }
 
 // --- materials ---
 
-function setHandleMaterial(
-  e: Entity,
-  color: Color4,
-  kind: 'arrow' | 'plane',
-  highlighted: boolean
-): void {
+function setHandleMaterial(e: Entity, color: Color4, kind: Kind, highlighted: boolean): void {
   const rgb = { r: color.r, g: color.g, b: color.b }
-  if (kind === 'arrow') {
+  if (kind === 'plane') {
+    Material.setPbrMaterial(e, {
+      albedoColor: { ...rgb, a: highlighted ? 0.6 : 0.4 },
+      emissiveColor: rgb,
+      emissiveIntensity: highlighted ? 1.1 : 0.3,
+      roughness: 1
+    })
+  } else {
     Material.setPbrMaterial(e, {
       albedoColor: color,
       emissiveColor: rgb,
       emissiveIntensity: highlighted ? 1.4 : 0.35,
       roughness: 1,
       metallic: 0
-    })
-  } else {
-    Material.setPbrMaterial(e, {
-      albedoColor: { ...rgb, a: highlighted ? 0.6 : 0.4 },
-      emissiveColor: rgb,
-      emissiveIntensity: highlighted ? 1.1 : 0.3,
-      roughness: 1
     })
   }
 }
@@ -118,6 +125,7 @@ function unit(axis: Axis): Vector3 {
 }
 
 const ARM_LEN = 0.96 // shaft + head, in gizmo-local units
+const RING_R = 0.8 // rotation-ring radius, in gizmo-local units
 
 function makeArrow(parent: Entity, axis: Axis): void {
   const rot = axisRotation(axis)
@@ -164,6 +172,42 @@ function makePlane(parent: Entity, plane: 'xy' | 'xz' | 'yz'): void {
   handles.set(plane, { entities: [quad], color: PLANE_COLOR[plane], kind: 'plane' })
 }
 
+// Orientation taking the ring's local +Z (its plane normal) onto `axis`.
+function ringOrientation(axis: Axis): Quaternion {
+  return axis === 'x'
+    ? Quaternion.fromEulerDegrees(0, 90, 0)
+    : axis === 'y'
+      ? Quaternion.fromEulerDegrees(-90, 0, 0)
+      : Quaternion.Identity()
+}
+
+// A rotation ring around `axis`: a circle of thin box segments in the ring's
+// local XY plane, the whole ring oriented so its normal points along the axis.
+function makeRing(parent: Entity, axis: Axis): void {
+  const ring = engine.addEntity()
+  Transform.create(ring, { parent, rotation: ringOrientation(axis) })
+
+  const segs = 32
+  const segLen = ((2 * Math.PI * RING_R) / segs) * 1.15
+  const thick = 0.045
+  const color = AXIS_COLOR[axis]
+  const entities: Entity[] = []
+  for (let i = 0; i < segs; i++) {
+    const deg = (360 / segs) * i
+    const rad = (deg * Math.PI) / 180
+    const seg = engine.addEntity()
+    Transform.create(seg, {
+      parent: ring,
+      position: Vector3.create(RING_R * Math.cos(rad), RING_R * Math.sin(rad), 0),
+      rotation: Quaternion.fromEulerDegrees(0, 0, deg + 90),
+      scale: Vector3.create(segLen, thick, thick)
+    })
+    MeshRenderer.setBox(seg)
+    entities.push(seg)
+  }
+  handles.set(`r${axis}` as HandleId, { entities, color, kind: 'ring' })
+}
+
 // Render resolution for the gizmo texture: track the canvas aspect, capped.
 function textureSize(w: number, h: number): { width: number; height: number } {
   const scale = Math.min(1, 1600 / Math.max(w, h))
@@ -201,16 +245,38 @@ export function setupGizmo(): void {
   const root = engine.addEntity()
   Transform.create(root)
   CameraLayers.create(root, { layers: [GIZMO_LAYER] })
-  makeArrow(root, 'x')
-  makeArrow(root, 'y')
-  makeArrow(root, 'z')
-  makePlane(root, 'xy')
-  makePlane(root, 'xz')
-  makePlane(root, 'yz')
+
+  const tg = engine.addEntity()
+  Transform.create(tg, { parent: root })
+  VisibilityComponent.create(tg, { visible: true, propagateToChildren: true })
+  makeArrow(tg, 'x')
+  makeArrow(tg, 'y')
+  makeArrow(tg, 'z')
+  makePlane(tg, 'xy')
+  makePlane(tg, 'xz')
+  makePlane(tg, 'yz')
+  translateGroup = tg
+
+  const rg = engine.addEntity()
+  Transform.create(rg, { parent: root })
+  VisibilityComponent.create(rg, { visible: false, propagateToChildren: true })
+  makeRing(rg, 'x')
+  makeRing(rg, 'y')
+  makeRing(rg, 'z')
+  rotateGroup = rg
+
   gizmoRoot = root
   applyHighlight(null) // all dim to start
 
   engine.addSystem(updateGizmo)
+}
+
+// Show the handle group for `mode`, hide the other (only on change).
+function showGroup(mode: Mode): void {
+  if (mode === lastMode || translateGroup === null || rotateGroup === null) return
+  lastMode = mode
+  VisibilityComponent.getMutable(translateGroup).visible = mode === 'translate'
+  VisibilityComponent.getMutable(rotateGroup).visible = mode === 'rotate'
 }
 
 // --- ray pick ---
@@ -241,20 +307,24 @@ function rayToSegmentDist(o: Vector3, d: Vector3, a: Vector3, b: Vector3): numbe
   return Vector3.distance(pRay, pSeg)
 }
 
-// Pick the handle nearest the pointer ray (planes first when the ray passes
-// through their quad, then the nearest axis within a threshold).
-function pickHandle(
+function axisDirs(rotation: Quaternion): Record<Axis, Vector3> {
+  return {
+    x: Vector3.normalize(rotateVec3ByQuat(unit('x'), rotation)),
+    y: Vector3.normalize(rotateVec3ByQuat(unit('y'), rotation)),
+    z: Vector3.normalize(rotateVec3ByQuat(unit('z'), rotation))
+  }
+}
+
+// Pick the translate handle nearest the pointer ray (planes first when the ray
+// passes through their quad, then the nearest axis within a threshold).
+function pickTranslate(
   origin: Vector3,
   rotation: Quaternion,
   s: number,
   rayO: Vector3,
   rayD: Vector3
 ): HandleId | null {
-  const dir: Record<Axis, Vector3> = {
-    x: Vector3.normalize(rotateVec3ByQuat(unit('x'), rotation)),
-    y: Vector3.normalize(rotateVec3ByQuat(unit('y'), rotation)),
-    z: Vector3.normalize(rotateVec3ByQuat(unit('z'), rotation))
-  }
+  const dir = axisDirs(rotation)
 
   // planes (explicit 2D targets)
   const o = 0.3 * s
@@ -293,6 +363,35 @@ function pickHandle(
   return bestAxis
 }
 
+// Pick the rotation ring whose circle the pointer ray crosses (nearest by
+// camera depth when more than one is within the band).
+function pickRotate(
+  origin: Vector3,
+  rotation: Quaternion,
+  s: number,
+  rayO: Vector3,
+  rayD: Vector3
+): HandleId | null {
+  const dir = axisDirs(rotation)
+  const R = RING_R * s
+  const band = 0.14 * s
+  let best: HandleId | null = null
+  let bestT = Infinity
+  for (const axis of ['x', 'y', 'z'] as Axis[]) {
+    const n = dir[axis]
+    const denom = Vector3.dot(rayD, n)
+    if (Math.abs(denom) < 1e-4) continue
+    const t = Vector3.dot(Vector3.subtract(origin, rayO), n) / denom
+    if (t < 0) continue
+    const hit = Vector3.add(rayO, Vector3.scale(rayD, t))
+    if (Math.abs(Vector3.distance(hit, origin) - R) <= band && t < bestT) {
+      bestT = t
+      best = `r${axis}` as HandleId
+    }
+  }
+  return best
+}
+
 // The world-space pointer ray (origin = primary camera, dir = pointer info).
 function pointerRay(): { o: Vector3; d: Vector3 } | null {
   const ptr = PrimaryPointerInfo.getOrNull(engine.RootEntity)
@@ -314,17 +413,20 @@ function closestAxisParam(a: Vector3, u: Vector3, o: Vector3, d: Vector3): numbe
   return (Vector3.dot(u, w0) - b * Vector3.dot(d, w0)) / denom
 }
 
-function rayPlaneHit(
-  o: Vector3,
-  d: Vector3,
-  p: Vector3,
-  n: Vector3
-): Vector3 | null {
+function rayPlaneHit(o: Vector3, d: Vector3, p: Vector3, n: Vector3): Vector3 | null {
   const denom = Vector3.dot(d, n)
   if (Math.abs(denom) < 1e-5) return null
   const t = Vector3.dot(Vector3.subtract(p, o), n) / denom
   if (t < 0) return null
   return Vector3.add(o, Vector3.scale(d, t))
+}
+
+// An orthonormal (u, v) basis spanning the plane with normal n.
+function planeBasis(n: Vector3): { u: Vector3; v: Vector3 } {
+  const ref = Math.abs(n.y) < 0.99 ? Vector3.create(0, 1, 0) : Vector3.create(1, 0, 0)
+  const u = Vector3.normalize(Vector3.cross(ref, n))
+  const v = Vector3.cross(n, u)
+  return { u, v }
 }
 
 function scaleFor(world: Vector3, cam: Vector3): number {
@@ -353,23 +455,38 @@ function setGizmoTransform(pos: Vector3, rot: Quaternion, s: number): void {
 
 // --- drag ---
 
+type Local = { x: number; y: number; z: number }
+type LocalRot = { x: number; y: number; z: number; w: number }
+
 type DragState = {
+  kind: 'translate-axis' | 'translate-plane' | 'rotate'
   startWorld: Vector3
   startRot: Quaternion
+  // held local fields (the ones this drag does not change)
+  position: Local
+  rotation: LocalRot
+  scale: Local
+  parent: number
+  // translate-axis
   axisDir?: Vector3
   grabT?: number
+  // translate-plane
   planeNormal?: Vector3
   grabHit?: Vector3
-  rotation: { x: number; y: number; z: number; w: number }
-  scale: { x: number; y: number; z: number }
-  parent: number
+  // rotate
+  rotNormal?: Vector3
+  rotU?: Vector3
+  rotV?: Vector3
+  rotAngle0?: number
 }
 
 let drag: DragState | null = null
-// Last committed drag position, held briefly after release so the gizmo doesn't
-// snap back to the (still-stale) snapshot position during the settle window.
+// Last committed drag pose, held briefly after release so the gizmo doesn't snap
+// back to the (still-stale) snapshot pose during the settle window.
 let lastDragWorld: Vector3 | null = null
+let lastDragRot: Quaternion | null = null
 let pendingWorld: Vector3 | null = null
+let pendingRot: Quaternion | null = null
 let pendingTime = 0
 
 // Begin a drag on the currently-hovered handle (called from the panel's down).
@@ -380,27 +497,48 @@ export function startGizmoDrag(): void {
   if (wt === null || ray === null) return
 
   const t = state.snapshot[state.selectedEntity]?.Transform as
-    | { rotation?: DragState['rotation']; scale?: DragState['scale']; parent?: number }
+    | { position?: Local; rotation?: LocalRot; scale?: Local; parent?: number }
     | undefined
   const base = {
     startWorld: { ...wt.position },
     startRot: { ...wt.rotation },
+    position: t?.position ?? { x: 0, y: 0, z: 0 },
     rotation: t?.rotation ?? { x: 0, y: 0, z: 0, w: 1 },
     scale: t?.scale ?? { x: 1, y: 1, z: 1 },
     parent: t?.parent ?? 0
   }
 
   const handle = state.gizmoHover
-  if (handle.length === 1) {
+  if (handle[0] === 'r') {
+    const axis = handle[1] as Axis
+    const n = Vector3.normalize(rotateVec3ByQuat(unit(axis), wt.rotation))
+    const hit = rayPlaneHit(ray.o, ray.d, wt.position, n)
+    if (hit === null) return
+    const { u, v } = planeBasis(n)
+    const rel = Vector3.subtract(hit, wt.position)
+    drag = {
+      ...base,
+      kind: 'rotate',
+      rotNormal: n,
+      rotU: u,
+      rotV: v,
+      rotAngle0: Math.atan2(Vector3.dot(rel, v), Vector3.dot(rel, u))
+    }
+  } else if (handle.length === 1) {
     const axisDir = Vector3.normalize(rotateVec3ByQuat(unit(handle as Axis), wt.rotation))
-    drag = { ...base, axisDir, grabT: closestAxisParam(wt.position, axisDir, ray.o, ray.d) }
+    drag = {
+      ...base,
+      kind: 'translate-axis',
+      axisDir,
+      grabT: closestAxisParam(wt.position, axisDir, ray.o, ray.d)
+    }
   } else {
     const p = PLANES.find((pl) => pl.id === handle)
     if (p === undefined) return
     const normal = Vector3.normalize(rotateVec3ByQuat(unit(p.n), wt.rotation))
     const grabHit = rayPlaneHit(ray.o, ray.d, wt.position, normal)
     if (grabHit === null) return
-    drag = { ...base, planeNormal: normal, grabHit }
+    drag = { ...base, kind: 'translate-plane', planeNormal: normal, grabHit }
   }
   state.gizmoDragging = true
 }
@@ -410,8 +548,10 @@ export function endGizmoDrag(): void {
   drag = null
   state.gizmoDragging = false
   pendingWorld = lastDragWorld
+  pendingRot = lastDragRot
   pendingTime = 0
   lastDragWorld = null
+  lastDragRot = null
   syncAfterDrag().catch(console.error)
 }
 
@@ -419,26 +559,55 @@ function updateDrag(camT: { position: Vector3 }): void {
   if (drag === null || state.selectedEntity === null) return
   const ray = pointerRay()
   if (ray === null) return
+  const id = state.selectedEntity
 
-  let world: Vector3
-  if (drag.axisDir !== undefined && drag.grabT !== undefined) {
-    const t = closestAxisParam(drag.startWorld, drag.axisDir, ray.o, ray.d)
-    world = Vector3.add(drag.startWorld, Vector3.scale(drag.axisDir, t - drag.grabT))
-  } else if (drag.planeNormal !== undefined && drag.grabHit !== undefined) {
-    const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.planeNormal)
+  if (drag.kind === 'rotate') {
+    const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.rotNormal as Vector3)
     if (hit === null) return
-    world = Vector3.add(drag.startWorld, Vector3.subtract(hit, drag.grabHit))
-  } else {
+    const rel = Vector3.subtract(hit, drag.startWorld)
+    const angle = Math.atan2(
+      Vector3.dot(rel, drag.rotV as Vector3),
+      Vector3.dot(rel, drag.rotU as Vector3)
+    )
+    const deltaDeg = ((angle - (drag.rotAngle0 as number)) * 180) / Math.PI
+    const rotDelta = Quaternion.fromAngleAxis(deltaDeg, drag.rotNormal as Vector3)
+    const newWorldRot = Quaternion.multiply(rotDelta, drag.startRot)
+
+    lastDragWorld = drag.startWorld
+    lastDragRot = newWorldRot
+    setGizmoTransform(drag.startWorld, newWorldRot, scaleFor(drag.startWorld, camT.position))
+    const localRot = worldToLocalRotation(state.snapshot, id, newWorldRot)
+    if (localRot !== null) {
+      fireTransform(
+        id,
+        JSON.stringify({
+          position: drag.position,
+          rotation: localRot,
+          scale: drag.scale,
+          parent: drag.parent
+        })
+      )
+    }
     return
   }
 
-  // Preview the gizmo at the dragged position, and commit the Transform.
+  let world: Vector3
+  if (drag.kind === 'translate-axis') {
+    const t = closestAxisParam(drag.startWorld, drag.axisDir as Vector3, ray.o, ray.d)
+    world = Vector3.add(drag.startWorld, Vector3.scale(drag.axisDir as Vector3, t - (drag.grabT as number)))
+  } else {
+    const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.planeNormal as Vector3)
+    if (hit === null) return
+    world = Vector3.add(drag.startWorld, Vector3.subtract(hit, drag.grabHit as Vector3))
+  }
+
   lastDragWorld = world
+  lastDragRot = drag.startRot
   setGizmoTransform(world, drag.startRot, scaleFor(world, camT.position))
-  const local = worldToLocalPosition(state.snapshot, state.selectedEntity, world)
+  const local = worldToLocalPosition(state.snapshot, id, world)
   if (local !== null) {
     fireTransform(
-      state.selectedEntity,
+      id,
       JSON.stringify({
         position: local,
         rotation: drag.rotation,
@@ -449,6 +618,11 @@ function updateDrag(camT: { position: Vector3 }): void {
   }
 }
 
+// Quaternions are close (same orientation) when |dot| ~ 1.
+function quatClose(a: Quaternion, b: Quaternion): boolean {
+  return Math.abs(a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w) > 0.9999
+}
+
 function updateGizmo(dt: number): void {
   if (gizmoCamera === null || gizmoRoot === null) return
   const dragging = drag !== null
@@ -456,12 +630,20 @@ function updateGizmo(dt: number): void {
     if (state.gizmoHover !== null) state.gizmoHover = null
     applyHighlight(null)
     pendingWorld = null
+    pendingRot = null
     return
   }
 
   const camT = Transform.getOrNull(engine.CameraEntity)
   if (camT === null) return
   mirrorCamera(camT)
+
+  const mode: Mode = dragging
+    ? (drag as DragState).kind === 'rotate'
+      ? 'rotate'
+      : 'translate'
+    : (activeMode() as Mode)
+  showGroup(mode)
 
   if (dragging) {
     updateDrag(camT)
@@ -472,24 +654,32 @@ function updateGizmo(dt: number): void {
   const wt = worldTransformOf(state.snapshot, state.selectedEntity as string)
   if (wt === null) return
 
-  // Hold at the just-dragged position until the snapshot reflects it (or time
-  // out), so the gizmo doesn't briefly snap back during the post-drag settle.
+  // Hold at the just-dragged pose until the snapshot reflects it (or time out),
+  // so the gizmo doesn't briefly snap back during the post-drag settle.
   let pos = wt.position
-  if (pendingWorld !== null) {
+  let rot = wt.rotation
+  if (pendingWorld !== null && pendingRot !== null) {
     pendingTime += dt
-    if (Vector3.distance(wt.position, pendingWorld) < 0.02 || pendingTime > 1.5) {
+    const settled =
+      Vector3.distance(wt.position, pendingWorld) < 0.02 && quatClose(wt.rotation, pendingRot)
+    if (settled || pendingTime > 1.5) {
       pendingWorld = null
+      pendingRot = null
     } else {
       pos = pendingWorld
+      rot = pendingRot
     }
   }
 
   const s = scaleFor(pos, camT.position)
-  setGizmoTransform(pos, wt.rotation, s)
+  setGizmoTransform(pos, rot, s)
 
   const ray = pointerRay()
   if (ray !== null) {
-    const hover = pickHandle(pos, wt.rotation, s, ray.o, ray.d)
+    const hover =
+      mode === 'rotate'
+        ? pickRotate(pos, rot, s, ray.o, ray.d)
+        : pickTranslate(pos, rot, s, ray.o, ray.d)
     state.gizmoHover = hover
     applyHighlight(hover)
   }

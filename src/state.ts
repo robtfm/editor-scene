@@ -50,7 +50,8 @@ export const state = {
   hoveredDelete: null as string | null,
   // entity id targeted by the transform gizmo (set by clicking a Select marker)
   selectedEntity: null as string | null,
-  // gizmo handle currently under the pointer: 'x'|'y'|'z'|'xy'|'xz'|'yz' or null
+  // gizmo handle currently under the pointer: translate 'x'|'y'|'z'|'xy'|'xz'|
+  // 'yz', rotate 'rx'|'ry'|'rz', or null
   gizmoHover: null as string | null,
   // true while a gizmo handle is being dragged
   gizmoDragging: false

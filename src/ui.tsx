@@ -755,13 +755,15 @@ function treeBody(): ReactEcs.JSX.Element[] {
 // Overlay actions. Extend this list to add more world-space tools.
 const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'select', label: 'Select' },
-  { id: 'translate', label: 'Translate' }
+  { id: 'translate', label: 'Translate' },
+  { id: 'rotate', label: 'Rotate' }
 ]
 
 // Fullscreen panel showing the gizmo camera's render (composited on top of the
 // world). Pointer-transparent for now; the drag handler comes with interaction.
 function gizmoPanel(): ReactEcs.JSX.Element | null {
-  if (state.activeAction !== 'translate' || state.selectedEntity === null) {
+  const mode = state.activeAction
+  if ((mode !== 'translate' && mode !== 'rotate') || state.selectedEntity === null) {
     return null
   }
   const cam = gizmoCameraEntity()
