@@ -5,10 +5,13 @@ import {
   state,
   clearComponentEdits,
   primeScroll,
+  parentOf,
+  topLevelSelected,
   type ComponentKey,
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
+import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
 import { rotateVec3ByQuat } from './perspective-to-screen'
@@ -260,6 +263,44 @@ export async function deleteEntityReparent(id: string): Promise<void> {
     console.error('delete_entity failed:', e)
   }
   await reloadAfter([id])
+}
+
+// Whether `ancestor` is an ancestor of `node` in the snapshot hierarchy.
+function isAncestorOf(snapshot: Snapshot, ancestor: string, node: string): boolean {
+  let cur = parentOf(snapshot, node)
+  while (cur !== null) {
+    if (cur === ancestor) return true
+    cur = parentOf(snapshot, cur)
+  }
+  return false
+}
+
+// Reparent the selection under the active entity, preserving each item's world
+// placement. Only top-level selected entities move (a selected sub-tree stays
+// intact); the active entity, its ancestors (would cycle), and entities already
+// parented to it are skipped.
+export async function reparentSelectionToActive(): Promise<void> {
+  const active = state.activeEntity
+  if (active === null || state.selected.size < 2) return
+  const snap = state.snapshot
+
+  const targets = topLevelSelected(snap).filter(
+    (c) =>
+      c !== active &&
+      !isAncestorOf(snap, c, active) &&
+      String(readTransform(c).parent) !== active
+  )
+
+  for (const c of targets) {
+    const local = localRelativeTo(snap, c, active)
+    const json = JSON.stringify({ ...local, parent: Number(active) })
+    try {
+      await BevyApi.consoleCommand('set_component', [c, 'Transform', json])
+    } catch (e) {
+      console.error('reparent failed:', c, e)
+    }
+  }
+  await reloadAfter()
 }
 
 // Apply structured-editor edits: rebuild the JSON from the snapshot value shape

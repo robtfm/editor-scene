@@ -153,6 +153,55 @@ export function worldToLocalRotation(
   return Quaternion.multiply(inv, world)
 }
 
+// World (composed) scale of an entity. Used to warn before reparenting under a
+// non-uniformly-scaled target: a child of such a parent inherits the stretch at
+// its own orientation, which needs shear a TRS Transform can't store, so its
+// world placement can't be preserved.
+export function worldScaleOf(snapshot: Snapshot, id: string): Vector3 {
+  return composed(snapshot, id, new Map(), new Set()).scale
+}
+
+// Whether `id`'s world scale is non-uniform beyond a small tolerance.
+export function isWorldScaleNonUniform(snapshot: Snapshot, id: string): boolean {
+  const s = worldScaleOf(snapshot, id)
+  const mx = Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z))
+  const mn = Math.min(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z))
+  return mn > 1e-6 && (mx - mn) / mx > 0.01
+}
+
+// The local Transform (position/rotation/scale relative to `parentId`) that
+// preserves `childId`'s current world placement — used to reparent an entity
+// under a new parent without moving it in the world. This is the exact inverse
+// of `composed()` (the same position->rotation->scale path the engine resolves
+// transforms with), so it round-trips: scale is the component-wise ratio,
+// rotation is parentWorld^-1 * childWorld, position un-scales/un-rotates the
+// world offset into the parent's frame.
+export function localRelativeTo(
+  snapshot: Snapshot,
+  childId: string,
+  parentId: string
+): { position: TransformValue['position']; rotation: TransformValue['rotation']; scale: TransformValue['scale'] } {
+  const cache = new Map<string, Trs>()
+  const c = composed(snapshot, childId, cache, new Set())
+  const p = composed(snapshot, parentId, cache, new Set())
+  const invRot = Quaternion.create(-p.rot.x, -p.rot.y, -p.rot.z, p.rot.w)
+  const rel = rotateVec3ByQuat(Vector3.subtract(c.pos, p.pos), invRot)
+  const r = Quaternion.multiply(invRot, c.rot)
+  return {
+    position: {
+      x: rel.x / (p.scale.x || 1),
+      y: rel.y / (p.scale.y || 1),
+      z: rel.z / (p.scale.z || 1)
+    },
+    rotation: { x: r.x, y: r.y, z: r.z, w: r.w },
+    scale: {
+      x: c.scale.x / (p.scale.x || 1),
+      y: c.scale.y / (p.scale.y || 1),
+      z: c.scale.z / (p.scale.z || 1)
+    }
+  }
+}
+
 function isZeroOffset(t: TransformValue): boolean {
   const p = t.position
   if (p === undefined) return true

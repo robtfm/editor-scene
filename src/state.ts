@@ -46,6 +46,8 @@ export const state = {
   frozen: false,
   // entity id whose delete-confirm dialog is open, or null
   deleteConfirm: null as string | null,
+  // true while the non-uniform-parent reparent confirm dialog is open
+  parentConfirm: false,
   // entity id whose delete button is hovered (for the modifier tooltip), or null
   hoveredDelete: null as string | null,
   // current multi-selection (tree + markers). The gizmo anchors on activeEntity

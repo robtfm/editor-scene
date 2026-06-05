@@ -21,6 +21,7 @@ import {
   type Forest
 } from './state'
 import { overlayUi } from './overlay'
+import { isWorldScaleNonUniform } from './world-pos'
 import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
 import { relationsCameraEntity } from './relations'
 import {
@@ -33,6 +34,7 @@ import {
   deleteEntity,
   deleteEntityRecursive,
   deleteEntityReparent,
+  reparentSelectionToActive,
   childIdsOf
 } from './inspector'
 import {
@@ -56,6 +58,7 @@ const TEXT = Color4.create(0.9, 0.9, 0.95, 1)
 const MUTED = Color4.create(0.6, 0.6, 0.68, 1)
 const ACCENT = Color4.create(0.55, 0.78, 1, 1)
 const BUTTON_BG = Color4.create(0.25, 0.4, 0.6, 1)
+const WARN = Color4.create(1, 0.7, 0.2, 1)
 
 const FS = 14
 const ROW_H = FS + 8
@@ -891,6 +894,110 @@ function modeToggle(): ReactEcs.JSX.Element | [] {
   return []
 }
 
+// Reparent the whole selection under the active entity. Enabled only when more
+// than one entity is selected (there must be an active target plus others).
+function parentButton(): ReactEcs.JSX.Element {
+  const enabled = state.selected.size > 1
+  return (
+    <UiEntity
+      key="parent-button"
+      uiTransform={{
+        width: 120,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: enabled ? BUTTON_BG : REVERT_BG }}
+      uiText={{
+        value: 'Parent → Active',
+        fontSize: FS - 2,
+        color: enabled ? TEXT : MUTED
+      }}
+      onMouseDown={() => {
+        if (!enabled) return
+        // Reparenting under a non-uniformly-scaled target can't preserve world
+        // placement (shear) — confirm first; otherwise just do it.
+        if (
+          state.activeEntity !== null &&
+          isWorldScaleNonUniform(state.snapshot, state.activeEntity)
+        ) {
+          state.parentConfirm = true
+        } else {
+          reparentSelectionToActive().catch(console.error)
+        }
+      }}
+    />
+  )
+}
+
+// Confirm dialog shown when the parenting target has a non-uniform world scale,
+// since the reparented children's world placement can't be preserved.
+function parentDialog(): ReactEcs.JSX.Element | null {
+  if (!state.parentConfirm) return null
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {
+          state.parentConfirm = false
+        }}
+      />
+      <UiEntity
+        uiTransform={{ width: 440, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 26, alignItems: 'center' }}
+          uiText={{
+            value: '⚠ Non-uniform parent scale',
+            fontSize: FS + 2,
+            color: WARN,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 56, margin: { top: 4, bottom: 8 } }}
+          uiText={{
+            value:
+              "The target's world scale is non-uniform, so the selection's world " +
+              'placement (rotation/scale) cannot be preserved on reparent. Proceed anyway?',
+            fontSize: FS - 2,
+            color: MUTED,
+            textAlign: 'top-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 30, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {dialogButton('Reparent anyway', 150, BUTTON_BG, () => {
+            state.parentConfirm = false
+            reparentSelectionToActive().catch(console.error)
+          })}
+          {dialogButton('Cancel', 80, REVERT_BG, () => {
+            state.parentConfirm = false
+          })}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 function actionButton(action: {
   id: string
   label: string
@@ -1134,6 +1241,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           >
             {ACTIONS.map((action) => actionButton(action))}
             {modeToggle()}
+            {parentButton()}
           </UiEntity>
           <UiEntity
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
@@ -1190,6 +1298,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       </UiEntity>
 
       {deleteDialog() ?? []}
+      {parentDialog() ?? []}
     </UiEntity>
   )
 }
