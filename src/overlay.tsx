@@ -1,13 +1,24 @@
 import ReactEcs, { UiEntity } from '@dcl/sdk/react-ecs'
+import { inputSystem, InputAction } from '@dcl/sdk/ecs'
 import { Color4 } from '@dcl/sdk/math'
-import { state, selectEntityInTree, entityLabel } from './state'
+import { state, selectEntityInTree, selectionClick, entityLabel } from './state'
 import { computeWorldPositions, shouldMark } from './world-pos'
 import { projectWorldToScreen } from './camera-projection'
 
 const CIRCLE_D = 16
 const MARKER = Color4.create(0.4, 0.85, 1, 1)
 const MARKER_HOVER = Color4.create(1, 0.85, 0.3, 1)
+const MARKER_SELECTED = Color4.create(0.35, 0.9, 0.45, 1)
+const MARKER_ACTIVE = Color4.create(1, 0.6, 0.2, 1)
 const TIP_BG = Color4.create(0, 0, 0, 0.8)
+
+// In the scene, IaModifier is shift and IaWalk is ctrl.
+function clickModifiers(): { shift: boolean; ctrl: boolean } {
+  return {
+    shift: inputSystem.isPressed(InputAction.IA_MODIFIER),
+    ctrl: inputSystem.isPressed(InputAction.IA_WALK)
+  }
+}
 
 // Tooltip rendered as a top-level overlay child (not a child of the tiny
 // circle, which would constrain its text box to ~1 char and wrap per-letter).
@@ -36,13 +47,21 @@ function tooltip(id: string, left: number, top: number): ReactEcs.JSX.Element {
   )
 }
 
+function markerColor(id: string, hovered: boolean): Color4 {
+  if (hovered) return MARKER_HOVER
+  if (state.activeEntity === id) return MARKER_ACTIVE
+  if (state.selected.has(id)) return MARKER_SELECTED
+  return MARKER
+}
+
 function marker(
   id: string,
   left: number,
   top: number,
   hovered: boolean
 ): ReactEcs.JSX.Element {
-  const color = hovered ? MARKER_HOVER : MARKER
+  const color = markerColor(id, hovered)
+  const selected = state.selected.has(id)
   return (
     <UiEntity
       key={`marker-${id}`}
@@ -55,7 +74,7 @@ function marker(
         borderWidth: 2,
         borderColor: color
       }}
-      uiBackground={{ color: { ...color, a: 0.35 } }}
+      uiBackground={{ color: { ...color, a: selected ? 0.6 : 0.35 } }}
       onMouseEnter={() => {
         state.hoveredOverlay = id
       }}
@@ -63,8 +82,9 @@ function marker(
         if (state.hoveredOverlay === id) state.hoveredOverlay = null
       }}
       onMouseDown={() => {
-        state.selectedEntity = id
-        selectEntityInTree(state.snapshot, id)
+        const { shift, ctrl } = clickModifiers()
+        selectionClick(id, shift, ctrl)
+        if (state.selected.has(id)) selectEntityInTree(state.snapshot, id)
       }}
     />
   )

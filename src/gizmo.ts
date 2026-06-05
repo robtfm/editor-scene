@@ -12,7 +12,7 @@ import {
   type Entity
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
-import { state } from './state'
+import { state, topLevelSelected } from './state'
 import { worldTransformOf, worldToLocalPosition, worldToLocalRotation } from './world-pos'
 import { rotateVec3ByQuat } from './perspective-to-screen'
 import { cameraFovY, projectWorldToScreen } from './camera-projection'
@@ -68,7 +68,7 @@ export function gizmoCameraEntity(): Entity | null {
 // Which transform mode the gizmo is in (translate/rotate), or null when no
 // transform action is active or nothing is selected.
 function activeMode(): Mode | null {
-  if (state.selectedEntity === null) return null
+  if (state.activeEntity === null) return null
   if (state.activeAction === 'translate') return 'translate'
   if (state.activeAction === 'rotate') return 'rotate'
   if (state.activeAction === 'scale') return 'scale'
@@ -627,6 +627,7 @@ type DragState = {
   // Scale is driven by relative pointer delta, not an absolute ray, so the
   // cursor's position doesn't matter (and it works when the pointer is locked).
   scaleAxis?: Axis
+  scaleAxisDir?: Vector3
   screenDir?: { x: number; y: number }
   accumPx?: number
 }
@@ -642,14 +643,48 @@ let pendingWorld: Vector3 | null = null
 let pendingRot: Quaternion | null = null
 let pendingTime = 0
 
+// Per-entity start state for the whole (top-level) selection, captured at drag
+// start. The active entity drives the handle math; its delta is applied to all.
+type GroupEntry = {
+  id: string
+  startWorldPos: Vector3
+  startWorldRot: Quaternion
+  position: Local
+  rotation: LocalRot
+  scale: Local
+  parent: number
+}
+let groupStart: GroupEntry[] = []
+
+function captureGroup(): GroupEntry[] {
+  const out: GroupEntry[] = []
+  for (const id of topLevelSelected(state.snapshot)) {
+    const wt = worldTransformOf(state.snapshot, id)
+    if (wt === null) continue
+    const t = state.snapshot[id]?.Transform as
+      | { position?: Local; rotation?: LocalRot; scale?: Local; parent?: number }
+      | undefined
+    out.push({
+      id,
+      startWorldPos: { ...wt.position },
+      startWorldRot: { ...wt.rotation },
+      position: t?.position ?? { x: 0, y: 0, z: 0 },
+      rotation: t?.rotation ?? { x: 0, y: 0, z: 0, w: 1 },
+      scale: t?.scale ?? { x: 1, y: 1, z: 1 },
+      parent: t?.parent ?? 0
+    })
+  }
+  return out
+}
+
 // Begin a drag on the currently-hovered handle (called from the panel's down).
 export function startGizmoDrag(): void {
-  if (state.gizmoHover === null || state.selectedEntity === null) return
-  const wt = worldTransformOf(state.snapshot, state.selectedEntity)
+  if (state.gizmoHover === null || state.activeEntity === null) return
+  const wt = worldTransformOf(state.snapshot, state.activeEntity)
   const ray = pointerRay()
   if (wt === null || ray === null) return
 
-  const t = state.snapshot[state.selectedEntity]?.Transform as
+  const t = state.snapshot[state.activeEntity]?.Transform as
     | { position?: Local; rotation?: LocalRot; scale?: Local; parent?: number }
     | undefined
   const base = {
@@ -688,6 +723,7 @@ export function startGizmoDrag(): void {
         ...base,
         kind: 'scale-axis',
         scaleAxis: axis,
+        scaleAxisDir: axisDir,
         screenDir: handleScreenDir(wt.position, axisDir),
         accumPx: 0
       }
@@ -708,12 +744,14 @@ export function startGizmoDrag(): void {
     if (grabHit === null) return
     drag = { ...base, kind: 'translate-plane', planeNormal: normal, grabHit }
   }
+  groupStart = captureGroup()
   state.gizmoDragging = true
 }
 
 export function endGizmoDrag(): void {
   if (drag === null) return
   drag = null
+  groupStart = []
   state.gizmoDragging = false
   pendingWorld = lastDragWorld
   pendingRot = lastDragRot
@@ -723,9 +761,36 @@ export function endGizmoDrag(): void {
   syncAfterDrag().catch(console.error)
 }
 
+// Apply a world transform op to every captured group entry: convert the new
+// world pose back to each entity's parent-local frame and write it.
+function applyGroup(
+  compute: (g: GroupEntry) => {
+    worldPos: Vector3
+    worldRot: Quaternion | null
+    scale: Local | null
+  }
+): void {
+  for (const g of groupStart) {
+    const r = compute(g)
+    const localPos = worldToLocalPosition(state.snapshot, g.id, r.worldPos)
+    if (localPos === null) continue
+    const localRot =
+      r.worldRot === null ? g.rotation : worldToLocalRotation(state.snapshot, g.id, r.worldRot)
+    fireTransform(
+      g.id,
+      JSON.stringify({
+        position: localPos,
+        rotation: localRot ?? g.rotation,
+        scale: r.scale ?? g.scale,
+        parent: g.parent
+      })
+    )
+  }
+}
+
 function updateDrag(camT: { position: Vector3 }): void {
-  if (drag === null || state.selectedEntity === null) return
-  const id = state.selectedEntity
+  if (drag === null || state.activeEntity === null) return
+  const pivot = drag.startWorld
 
   if (drag.kind === 'scale-axis' || drag.kind === 'scale-uniform') {
     // Accumulate relative pointer motion along the handle's screen direction;
@@ -736,31 +801,35 @@ function updateDrag(camT: { position: Vector3 }): void {
     if (delta !== undefined) {
       drag.accumPx = (drag.accumPx as number) + (delta.x * dir.x + delta.y * dir.y)
     }
-    const factor = Math.pow(2, (drag.accumPx as number) / SCALE_PX_PER_DOUBLING)
-    let newScale: Local
-    if (drag.kind === 'scale-axis') {
-      const axis = drag.scaleAxis as Axis
-      newScale = { ...drag.scale, [axis]: drag.scale[axis] * factor }
+    const f = Math.pow(2, (drag.accumPx as number) / SCALE_PX_PER_DOUBLING)
+    const each = state.pivotEach
+    if (drag.kind === 'scale-uniform') {
+      applyGroup((g) => ({
+        worldPos: each
+          ? g.startWorldPos
+          : Vector3.add(pivot, Vector3.scale(Vector3.subtract(g.startWorldPos, pivot), f)),
+        worldRot: null,
+        scale: { x: g.scale.x * f, y: g.scale.y * f, z: g.scale.z * f }
+      }))
     } else {
-      newScale = {
-        x: drag.scale.x * factor,
-        y: drag.scale.y * factor,
-        z: drag.scale.z * factor
-      }
-    }
-    // scale leaves world position/rotation put, so the gizmo doesn't move
-    lastDragWorld = drag.startWorld
-    lastDragRot = drag.startRot
-    setGizmoTransform(drag.startWorld, drag.startRot, scaleFor(drag.startWorld, camT.position))
-    fireTransform(
-      id,
-      JSON.stringify({
-        position: drag.position,
-        rotation: drag.rotation,
-        scale: newScale,
-        parent: drag.parent
+      const axis = drag.scaleAxis as Axis
+      const axisDir = drag.scaleAxisDir as Vector3
+      applyGroup((g) => {
+        const offset = Vector3.subtract(g.startWorldPos, pivot)
+        const along = Vector3.dot(offset, axisDir)
+        return {
+          worldPos: each
+            ? g.startWorldPos
+            : Vector3.add(g.startWorldPos, Vector3.scale(axisDir, along * (f - 1))),
+          worldRot: null,
+          scale: { ...g.scale, [axis]: g.scale[axis] * f }
+        }
       })
-    )
+    }
+    // scale leaves the active entity put, so the gizmo doesn't move
+    lastDragWorld = pivot
+    lastDragRot = drag.startRot
+    setGizmoTransform(pivot, drag.startRot, scaleFor(pivot, camT.position))
     return
   }
 
@@ -768,60 +837,52 @@ function updateDrag(camT: { position: Vector3 }): void {
   if (ray === null) return
 
   if (drag.kind === 'rotate') {
-    const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.rotNormal as Vector3)
+    const hit = rayPlaneHit(ray.o, ray.d, pivot, drag.rotNormal as Vector3)
     if (hit === null) return
-    const rel = Vector3.subtract(hit, drag.startWorld)
+    const rel = Vector3.subtract(hit, pivot)
     const angle = Math.atan2(
       Vector3.dot(rel, drag.rotV as Vector3),
       Vector3.dot(rel, drag.rotU as Vector3)
     )
     const deltaDeg = ((angle - (drag.rotAngle0 as number)) * 180) / Math.PI
-    const rotDelta = Quaternion.fromAngleAxis(deltaDeg, drag.rotNormal as Vector3)
-    const newWorldRot = Quaternion.multiply(rotDelta, drag.startRot)
+    const dq = Quaternion.fromAngleAxis(deltaDeg, drag.rotNormal as Vector3)
+    const each = state.pivotEach
 
-    lastDragWorld = drag.startWorld
-    lastDragRot = newWorldRot
-    setGizmoTransform(drag.startWorld, newWorldRot, scaleFor(drag.startWorld, camT.position))
-    const localRot = worldToLocalRotation(state.snapshot, id, newWorldRot)
-    if (localRot !== null) {
-      fireTransform(
-        id,
-        JSON.stringify({
-          position: drag.position,
-          rotation: localRot,
-          scale: drag.scale,
-          parent: drag.parent
-        })
-      )
-    }
+    applyGroup((g) => ({
+      worldPos: each
+        ? g.startWorldPos
+        : Vector3.add(pivot, rotateVec3ByQuat(Vector3.subtract(g.startWorldPos, pivot), dq)),
+      worldRot: Quaternion.multiply(dq, g.startWorldRot),
+      scale: null
+    }))
+
+    lastDragWorld = pivot
+    lastDragRot = Quaternion.multiply(dq, drag.startRot)
+    setGizmoTransform(pivot, lastDragRot, scaleFor(pivot, camT.position))
     return
   }
 
+  // translate: world delta from the active handle, applied to the whole group
   let world: Vector3
   if (drag.kind === 'translate-axis') {
-    const t = closestAxisParam(drag.startWorld, drag.axisDir as Vector3, ray.o, ray.d)
-    world = Vector3.add(drag.startWorld, Vector3.scale(drag.axisDir as Vector3, t - (drag.grabT as number)))
+    const t = closestAxisParam(pivot, drag.axisDir as Vector3, ray.o, ray.d)
+    world = Vector3.add(pivot, Vector3.scale(drag.axisDir as Vector3, t - (drag.grabT as number)))
   } else {
-    const hit = rayPlaneHit(ray.o, ray.d, drag.startWorld, drag.planeNormal as Vector3)
+    const hit = rayPlaneHit(ray.o, ray.d, pivot, drag.planeNormal as Vector3)
     if (hit === null) return
-    world = Vector3.add(drag.startWorld, Vector3.subtract(hit, drag.grabHit as Vector3))
+    world = Vector3.add(pivot, Vector3.subtract(hit, drag.grabHit as Vector3))
   }
+  const worldDelta = Vector3.subtract(world, pivot)
+
+  applyGroup((g) => ({
+    worldPos: Vector3.add(g.startWorldPos, worldDelta),
+    worldRot: null,
+    scale: null
+  }))
 
   lastDragWorld = world
   lastDragRot = drag.startRot
   setGizmoTransform(world, drag.startRot, scaleFor(world, camT.position))
-  const local = worldToLocalPosition(state.snapshot, id, world)
-  if (local !== null) {
-    fireTransform(
-      id,
-      JSON.stringify({
-        position: local,
-        rotation: drag.rotation,
-        scale: drag.scale,
-        parent: drag.parent
-      })
-    )
-  }
 }
 
 // Quaternions are close (same orientation) when |dot| ~ 1.
@@ -832,7 +893,7 @@ function quatClose(a: Quaternion, b: Quaternion): boolean {
 function updateGizmo(dt: number): void {
   if (gizmoCamera === null || gizmoRoot === null) return
   const dragging = drag !== null
-  if (!dragging && (!gizmoActive() || state.selectedEntity === null)) {
+  if (!dragging && (!gizmoActive() || state.activeEntity === null)) {
     if (state.gizmoHover !== null) state.gizmoHover = null
     applyHighlight(null)
     pendingWorld = null
@@ -859,7 +920,7 @@ function updateGizmo(dt: number): void {
   }
 
   // Position + orient on the target, then pick the hovered handle.
-  const wt = worldTransformOf(state.snapshot, state.selectedEntity as string)
+  const wt = worldTransformOf(state.snapshot, state.activeEntity as string)
   if (wt === null) return
 
   // Hold at the just-dragged pose until the snapshot reflects it (or time out),

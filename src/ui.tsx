@@ -8,6 +8,7 @@ import {
   toggleRawMode,
   clearComponentEdits,
   setActiveAction,
+  selectionClick,
   rowElementId,
   entityLabel,
   componentKey,
@@ -656,6 +657,17 @@ function componentNodes(
   return rows
 }
 
+const ROW_ACTIVE = Color4.create(0.5, 0.4, 0.2, 0.85)
+const ROW_SELECTED = Color4.create(0.28, 0.4, 0.55, 0.7)
+const ROW_HOVER = Color4.create(0.3, 0.4, 0.5, 0.6)
+
+function rowColor(entityId: string): Color4 {
+  if (state.activeEntity === entityId) return ROW_ACTIVE
+  if (state.selected.has(entityId)) return ROW_SELECTED
+  if (state.hoveredOverlay === entityId) return ROW_HOVER
+  return ENTITY_BG
+}
+
 // One entity and (when expanded) its components followed by its child entities,
 // nested under an indented container. `path` guards against malformed parent
 // cycles so rendering can't recurse forever.
@@ -677,8 +689,7 @@ function entityNode(
   childPath.add(entityId)
 
   const label =
-    `${hasContent ? chevron(expanded) : '·'} ${entityLabel(entityId)}` +
-    `   ${compCount}c${childCount > 0 ? ` · ${childCount}▼` : ''}`
+    `${entityLabel(entityId)}   ${compCount}c${childCount > 0 ? ` · ${childCount}▼` : ''}`
 
   return (
     <UiEntity
@@ -691,24 +702,29 @@ function entityNode(
           width: '100%',
           height: ROW_H + 2,
           margin: { bottom: 2 },
-          padding: { left: 4 }
+          flexDirection: 'row',
+          alignItems: 'center'
         }}
-        uiBackground={{
-          color:
-            state.hoveredOverlay === entityId
-              ? Color4.create(0.3, 0.4, 0.5, 0.6)
-              : ENTITY_BG
-        }}
-        uiText={{
-          value: label,
-          fontSize: FS,
-          color: TEXT,
-          textAlign: 'middle-left'
-        }}
-        onMouseDown={() => {
-          if (hasContent) toggleEntity(entityId)
-        }}
+        uiBackground={{ color: rowColor(entityId) }}
       >
+        <UiEntity
+          uiTransform={{ width: 18, height: ROW_H, justifyContent: 'center', alignItems: 'center' }}
+          uiText={{ value: hasContent ? chevron(expanded) : '·', fontSize: FS, color: MUTED }}
+          onMouseDown={() => {
+            if (hasContent) toggleEntity(entityId)
+          }}
+        />
+        <UiEntity
+          uiTransform={{ flexGrow: 1, height: ROW_H }}
+          uiText={{ value: label, fontSize: FS, color: TEXT, textAlign: 'middle-left' }}
+          onMouseDown={() => {
+            selectionClick(
+              entityId,
+              inputSystem.isPressed(InputAction.IA_MODIFIER),
+              inputSystem.isPressed(InputAction.IA_WALK)
+            )
+          }}
+        />
         {Number(entityId) >= 512 ? deleteButton(entityId) : []}
       </UiEntity>
       {expanded && (
@@ -766,7 +782,7 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
   const mode = state.activeAction
   if (
     (mode !== 'translate' && mode !== 'rotate' && mode !== 'scale') ||
-    state.selectedEntity === null
+    state.activeEntity === null
   ) {
     return null
   }
@@ -800,6 +816,36 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
         endGizmoDrag()
       }}
       onMouseDragLocked={lockScale ? () => {} : undefined}
+    />
+  )
+}
+
+// Rotate/scale pivot toggle: around the active entity vs each item's own origin.
+// Only meaningful for rotate/scale with more than one entity selected.
+function pivotToggle(): ReactEcs.JSX.Element | [] {
+  const relevant =
+    (state.activeAction === 'rotate' || state.activeAction === 'scale') &&
+    state.selected.size > 1
+  if (!relevant) return []
+  return (
+    <UiEntity
+      key="pivot-toggle"
+      uiTransform={{
+        width: 96,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: REVERT_BG }}
+      uiText={{
+        value: state.pivotEach ? 'Pivot: Each' : 'Pivot: Active',
+        fontSize: FS - 2,
+        color: TEXT
+      }}
+      onMouseDown={() => {
+        state.pivotEach = !state.pivotEach
+      }}
     />
   )
 }
@@ -1045,6 +1091,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}
           >
             {ACTIONS.map((action) => actionButton(action))}
+            {pivotToggle()}
           </UiEntity>
           <UiEntity
             uiTransform={{ flexDirection: 'row', alignItems: 'center' }}

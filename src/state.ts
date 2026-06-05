@@ -48,8 +48,13 @@ export const state = {
   deleteConfirm: null as string | null,
   // entity id whose delete button is hovered (for the modifier tooltip), or null
   hoveredDelete: null as string | null,
-  // entity id targeted by the transform gizmo (set by clicking a Select marker)
-  selectedEntity: null as string | null,
+  // current multi-selection (tree + markers). The gizmo anchors on activeEntity
+  // (the most-recently-clicked) and applies its delta to the whole selection.
+  selected: new Set<string>(),
+  activeEntity: null as string | null,
+  // rotate/scale pivot: false = around the active entity (orbits positions),
+  // true = each item about its own origin (positions unchanged).
+  pivotEach: false,
   // gizmo handle currently under the pointer: translate 'x'|'y'|'z'|'xy'|'xz'|
   // 'yz', rotate 'rx'|'ry'|'rz', or null
   gizmoHover: null as string | null,
@@ -83,6 +88,54 @@ export function rowElementId(id: string): string {
 
 export function setActiveAction(action: string): void {
   state.activeAction = state.activeAction === action ? null : action
+}
+
+export function isSelected(id: string): boolean {
+  return state.selected.has(id)
+}
+
+export function clearSelection(): void {
+  state.selected.clear()
+  state.activeEntity = null
+}
+
+// Apply a click to the selection. `additive` (shift) adds; `toggle` (ctrl)
+// flips membership; neither replaces the selection with just this entity.
+export function selectionClick(id: string, additive: boolean, toggle: boolean): void {
+  if (toggle) {
+    if (state.selected.has(id)) {
+      state.selected.delete(id)
+      if (state.activeEntity === id) {
+        let last: string | null = null
+        for (const v of state.selected) last = v
+        state.activeEntity = last
+      }
+      return
+    }
+  } else if (!additive) {
+    state.selected.clear()
+  }
+  state.selected.add(id)
+  state.activeEntity = id
+}
+
+// Selected entities with no selected ancestor — the set a group transform should
+// drive directly (descendants of a selected entity inherit its motion).
+export function topLevelSelected(snapshot: Snapshot): string[] {
+  const out: string[] = []
+  for (const id of state.selected) {
+    let p = parentOf(snapshot, id)
+    let nested = false
+    while (p !== null) {
+      if (state.selected.has(p)) {
+        nested = true
+        break
+      }
+      p = parentOf(snapshot, p)
+    }
+    if (!nested) out.push(id)
+  }
+  return out
 }
 
 // The compact JSON the editor shows for a component value when no draft is held.
