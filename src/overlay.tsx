@@ -67,6 +67,11 @@ export function startSelectBox(): void {
         box.curX = xy.x
         box.curY = xy.y
       }
+      // Track the modifier live so add/remove reflect the state at release, not
+      // at press (and the rubber-band colour updates as you hold shift/ctrl).
+      const { shift, ctrl } = clickModifiers()
+      box.add = shift
+      box.remove = ctrl
     } else {
       finishBox()
     }
