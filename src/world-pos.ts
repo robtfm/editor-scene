@@ -87,6 +87,54 @@ export function computeWorldPositions(
   return out
 }
 
+// World position + rotation of a single entity (for orienting a local-axis
+// gizmo). World position = composed-to-root minus entity 5; world rotation =
+// the composed rotation (the world origin's rotation is identity).
+export function worldTransformOf(
+  snapshot: Snapshot,
+  id: string
+): { position: Vector3; rotation: Quaternion } | null {
+  if (!('5' in snapshot)) return null
+  const cache = new Map<string, Trs>()
+  const origin = composed(snapshot, '5', cache, new Set()).pos
+  const trs = composed(snapshot, id, cache, new Set())
+  return { position: Vector3.subtract(trs.pos, origin), rotation: trs.rot }
+}
+
+// Inverse of the world-position computation: the local Transform.position that
+// places the entity at `world`. Used to write a gizmo-dragged world position
+// back as a (parent-relative) local position. Parent transform is read from the
+// snapshot (unchanged during a translate drag of the child).
+export function worldToLocalPosition(
+  snapshot: Snapshot,
+  id: string,
+  world: Vector3
+): { x: number; y: number; z: number } | null {
+  if (!('5' in snapshot)) return null
+  const cache = new Map<string, Trs>()
+  const t5 = composed(snapshot, '5', cache, new Set()).pos
+  const parentId = String(readTransform(snapshot, id).parent ?? 0)
+  const parent: Trs =
+    parentId === '0' || !(parentId in snapshot)
+      ? { pos: Vector3.Zero(), rot: Quaternion.Identity(), scale: Vector3.One() }
+      : composed(snapshot, parentId, cache, new Set())
+
+  const parentWorldPos = Vector3.subtract(parent.pos, t5)
+  const rel = Vector3.subtract(world, parentWorldPos)
+  const inv = Quaternion.create(
+    -parent.rot.x,
+    -parent.rot.y,
+    -parent.rot.z,
+    parent.rot.w
+  )
+  const unrot = rotateVec3ByQuat(rel, inv)
+  return {
+    x: unrot.x / (parent.scale.x || 1),
+    y: unrot.y / (parent.scale.y || 1),
+    z: unrot.z / (parent.scale.z || 1)
+  }
+}
+
 function isZeroOffset(t: TransformValue): boolean {
   const p = t.position
   if (p === undefined) return true

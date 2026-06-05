@@ -145,6 +145,22 @@ export async function setComponentValue(
   }
 }
 
+// --- gizmo drag commits ---
+
+// Fire a Transform write without awaiting/reloading — used per-frame during a
+// gizmo drag (the engine applies it to the bevy entity immediately; the gizmo
+// previews from its own computed position).
+export function fireTransform(entityId: string, json: string): void {
+  BevyApi.consoleCommand('set_component', [entityId, 'Transform', json]).catch(
+    () => {}
+  )
+}
+
+// Re-sync the snapshot after a drag ends (settle so the tree reflects the move).
+export async function syncAfterDrag(): Promise<void> {
+  await reloadAfter()
+}
+
 // --- delete / reparent ---
 
 type V3 = { x: number; y: number; z: number }

@@ -20,6 +20,7 @@ import {
   type Forest
 } from './state'
 import { overlayUi } from './overlay'
+import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
 import {
   refresh,
   setComponentValue,
@@ -753,8 +754,43 @@ function treeBody(): ReactEcs.JSX.Element[] {
 
 // Overlay actions. Extend this list to add more world-space tools.
 const ACTIONS: Array<{ id: string; label: string }> = [
-  { id: 'select', label: 'Select' }
+  { id: 'select', label: 'Select' },
+  { id: 'translate', label: 'Translate' }
 ]
+
+// Fullscreen panel showing the gizmo camera's render (composited on top of the
+// world). Pointer-transparent for now; the drag handler comes with interaction.
+function gizmoPanel(): ReactEcs.JSX.Element | null {
+  if (state.activeAction !== 'translate' || state.selectedEntity === null) {
+    return null
+  }
+  const cam = gizmoCameraEntity()
+  if (cam === null) return null
+  // Capture the pointer only when a handle is hovered or a drag is in progress,
+  // so clicks pass through to the world otherwise.
+  const capture = state.gizmoHover !== null || state.gizmoDragging
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        pointerFilter: capture ? 'block' : 'none'
+      }}
+      uiBackground={{
+        textureMode: 'stretch',
+        videoTexture: { videoPlayerEntity: cam }
+      }}
+      onMouseDown={() => {
+        startGizmoDrag()
+      }}
+      onMouseUp={() => {
+        endGizmoDrag()
+      }}
+    />
+  )
+}
 
 function actionButton(action: {
   id: string
@@ -919,6 +955,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       }}
     >
       {overlayUi() ?? []}
+      {gizmoPanel() ?? []}
       <UiEntity
         uiTransform={{
           width: 480,

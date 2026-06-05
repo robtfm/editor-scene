@@ -2,6 +2,7 @@ import { ReactEcsRenderer } from '@dcl/sdk/react-ecs'
 import { inspectorUi } from './ui'
 import { startInspector } from './inspector'
 import { startCameraProjection } from './camera-projection'
+import { setupGizmo } from './gizmo'
 
 export function main(): void {
   const _log = console.log
@@ -10,6 +11,7 @@ export function main(): void {
   }
 
   startCameraProjection()
+  setupGizmo()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {

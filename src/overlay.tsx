@@ -63,6 +63,7 @@ function marker(
         if (state.hoveredOverlay === id) state.hoveredOverlay = null
       }}
       onMouseDown={() => {
+        state.selectedEntity = id
         selectEntityInTree(state.snapshot, id)
       }}
     />

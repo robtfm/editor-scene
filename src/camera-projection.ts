@@ -51,6 +51,11 @@ export function startCameraProjection(): void {
   })
 }
 
+// Cached vertical FOV (radians), or null until the first fetch resolves.
+export function cameraFovY(): number | null {
+  return cachedFovY
+}
+
 /**
  * Project a world-space point to viewport pixel coords using the cached
  * player camera FOV plus the live `engine.CameraEntity` transform. Returns:

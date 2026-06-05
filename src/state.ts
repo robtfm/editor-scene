@@ -47,7 +47,13 @@ export const state = {
   // entity id whose delete-confirm dialog is open, or null
   deleteConfirm: null as string | null,
   // entity id whose delete button is hovered (for the modifier tooltip), or null
-  hoveredDelete: null as string | null
+  hoveredDelete: null as string | null,
+  // entity id targeted by the transform gizmo (set by clicking a Select marker)
+  selectedEntity: null as string | null,
+  // gizmo handle currently under the pointer: 'x'|'y'|'z'|'xy'|'xz'|'yz' or null
+  gizmoHover: null as string | null,
+  // true while a gizmo handle is being dragged
+  gizmoDragging: false
 }
 
 // The engine creates the scrollable link with scroll_position = None and only
