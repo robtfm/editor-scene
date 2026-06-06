@@ -23,7 +23,7 @@ import {
 } from './state'
 import { overlayUi } from './overlay'
 import { isWorldScaleNonUniform } from './world-pos'
-import { toggleFreeCam, orientToAxis } from './free-cam'
+import { cycleCamMode, orientToAxis } from './free-cam'
 import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
 import { relationsCameraEntity } from './relations'
 import {
@@ -977,11 +977,15 @@ function linksButton(): ReactEcs.JSX.Element {
   })
 }
 
-// Small fixed-width button (used for the camera axis-orient controls).
+const GHOST = Color4.create(0, 0, 0, 0)
+
+// Small fixed-width button (the camera axis-orient controls). `ghost` keeps it
+// laid out (reserving width) but invisible + inert.
 function miniButton(
   key: string,
   label: string,
   enabled: boolean,
+  ghost: boolean,
   onClick: () => void
 ): ReactEcs.JSX.Element {
   return (
@@ -994,10 +998,10 @@ function miniButton(
         alignItems: 'center',
         justifyContent: 'center'
       }}
-      uiBackground={{ color: REVERT_BG }}
-      uiText={{ value: label, fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
+      uiBackground={{ color: ghost ? GHOST : REVERT_BG }}
+      uiText={{ value: ghost ? '' : label, fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
       onMouseDown={() => {
-        if (enabled) onClick()
+        if (enabled && !ghost) onClick()
       }}
     />
   )
@@ -1013,39 +1017,80 @@ const AXES: Array<{ label: string; axis: 'x' | 'y' | 'z'; sign: number }> = [
   { label: '+Z', axis: 'z', sign: 1 },
   { label: '-Z', axis: 'z', sign: -1 }
 ]
-function cameraControls(): ReactEcs.JSX.Element[] {
-  const out: ReactEcs.JSX.Element[] = [
-    toggleChip('free-cam', state.freeCam ? 'Free Cam: On' : 'Free Cam: Off', () => {
-      toggleFreeCam()
-    })
-  ]
-  if (state.freeCam) {
-    const canOrient = state.activeEntity !== null
-    for (const a of AXES) {
-      out.push(
-        miniButton(`axis-${a.label}`, a.label, canOrient, () => {
-          orientToAxis(a.axis, a.sign)
-        })
-      )
-    }
-  }
-  return out
+const CAM_LABEL: Record<string, string> = {
+  none: 'Camera: Off',
+  free: 'Camera: Free',
+  target: 'Camera: Target'
+}
+function cameraModeButton(): ReactEcs.JSX.Element {
+  return toggleChip('cam-mode', CAM_LABEL[state.camMode], () => {
+    cycleCamMode()
+  })
 }
 
-// A thin vertical divider with surrounding space, to group toolbar sections.
+// Axis-orient buttons — context for the camera section. Always present (so the
+// layout never reflows); ghosted to invisible when no camera mode is active.
+function axisButtons(): ReactEcs.JSX.Element[] {
+  const ghost = state.camMode === 'none'
+  const enabled = !ghost && state.activeEntity !== null
+  return AXES.map((a) =>
+    miniButton(`axis-${a.label}`, a.label, enabled, ghost, () => {
+      orientToAxis(a.axis, a.sign)
+    })
+  )
+}
+
+// Tool section context: the orient/pivot toggle when it applies, else an empty
+// placeholder of the same width so the section keeps a constant size.
+function toolContext(): ReactEcs.JSX.Element {
+  const toggle = modeToggle()
+  if (!Array.isArray(toggle)) return toggle
+  return (
+    <UiEntity key="tool-ctx-ghost" uiTransform={{ width: 110, height: 22, margin: { left: 6 } }} />
+  )
+}
+
+// A full-height divider separating toolbar sections.
 function toolbarDivider(key: string): ReactEcs.JSX.Element {
   return (
     <UiEntity
       key={key}
-      uiTransform={{ width: 1, height: 16, margin: { left: 10, right: 4 } }}
+      uiTransform={{ width: 1, height: 46, margin: { left: 8, right: 4 } }}
       uiBackground={{ color: Color4.create(1, 1, 1, 0.18) }}
     />
   )
 }
 
-// Floating top-centre toolbar: mode (tools + select), parenting, and the
-// overlay-display controls. Kept out of the tree panel so its header is free
-// for tree-specific actions.
+// One toolbar section: a column of a primary row and a context row (the context
+// row is always present so all sections — and the panel height — stay constant).
+function toolbarSection(
+  key: string,
+  primary: ReactEcs.JSX.Element[],
+  context: ReactEcs.JSX.Element | ReactEcs.JSX.Element[]
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity key={key} uiTransform={{ flexDirection: 'column', alignItems: 'center' }}>
+      <UiEntity uiTransform={{ flexDirection: 'row', alignItems: 'center', height: 22 }}>
+        {primary}
+      </UiEntity>
+      <UiEntity
+        uiTransform={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: 22,
+          margin: { top: 4 }
+        }}
+      >
+        {context}
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
+// Floating top-centre toolbar: tools, parenting, view, and camera sections, each
+// with its context controls aligned beneath it. Kept out of the tree panel so
+// its header is free for tree-specific actions.
 function controlPanel(): ReactEcs.JSX.Element {
   return (
     <UiEntity
@@ -1062,16 +1107,13 @@ function controlPanel(): ReactEcs.JSX.Element {
         uiTransform={{ flexDirection: 'row', alignItems: 'center', padding: 6 }}
         uiBackground={{ color: PANEL_BG }}
       >
-        {ACTIONS.map((action) => actionButton(action))}
-        {modeToggle()}
-        {toolbarDivider('div-parent')}
-        {parentButton()}
-        {clearParentButton()}
-        {toolbarDivider('div-view')}
-        {nodeDisplayButton()}
-        {linksButton()}
-        {toolbarDivider('div-cam')}
-        {cameraControls()}
+        {toolbarSection('s-tools', ACTIONS.map(actionButton), toolContext())}
+        {toolbarDivider('div-1')}
+        {toolbarSection('s-parent', [parentButton(), clearParentButton()], [])}
+        {toolbarDivider('div-2')}
+        {toolbarSection('s-view', [nodeDisplayButton(), linksButton()], [])}
+        {toolbarDivider('div-3')}
+        {toolbarSection('s-cam', [cameraModeButton()], axisButtons())}
       </UiEntity>
     </UiEntity>
   )

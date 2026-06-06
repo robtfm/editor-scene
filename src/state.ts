@@ -45,8 +45,9 @@ export const state = {
   nodeDisplay: 'selecting' as 'always' | 'selected' | 'selecting',
   // whether to draw parent/child relationship links
   showLinks: true,
-  // whether free-cam mode is active (detached fly camera, avatar movement off)
-  freeCam: false,
+  // active camera mode: 'none' (player), 'free' (fly), or 'target' (orbit the
+  // active selection). Both 'free' and 'target' detach the camera + pin avatar.
+  camMode: 'none' as 'none' | 'free' | 'target',
   // entity whose world marker is hovered (for the id tooltip), or null
   hoveredOverlay: null as string | null,
   // scroll-to target for the tree body: a row elementId (reference) or a literal
