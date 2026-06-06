@@ -39,7 +39,9 @@ import {
   reparentSelectionToActive,
   clearParentOfSelection,
   selectionHasParented,
-  childIdsOf
+  childIdsOf,
+  addComponent,
+  deleteComponent
 } from './inspector'
 import {
   isColor,
@@ -167,8 +169,7 @@ function deleteButton(entityId: string): ReactEcs.JSX.Element {
       uiTransform={{
         width: 36,
         height: 20,
-        positionType: 'absolute',
-        position: { right: 18, top: 2 },
+        margin: { right: 6 },
         alignItems: 'center',
         justifyContent: 'center'
       }}
@@ -651,19 +652,31 @@ function componentNodes(
           width: '100%',
           height: ROW_H,
           margin: { bottom: 1 },
-          padding: { left: 4 },
+          flexDirection: 'row',
           alignItems: 'center'
         }}
-        uiText={{
-          value: `${chevron(expanded)} ${name}`,
-          fontSize: FS,
-          color: ACCENT,
-          textAlign: 'middle-left'
-        }}
-        onMouseDown={() => {
-          toggleComponent(key)
-        }}
-      />
+      >
+        <UiEntity
+          uiTransform={{ flexGrow: 1, height: ROW_H, padding: { left: 4 }, alignItems: 'center' }}
+          uiText={{
+            value: `${chevron(expanded)} ${name}`,
+            fontSize: FS,
+            color: ACCENT,
+            textAlign: 'middle-left'
+          }}
+          onMouseDown={() => {
+            toggleComponent(key)
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: 30, height: 20, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: DANGER }}
+          uiText={{ value: 'Del', fontSize: FS - 3, color: TEXT }}
+          onMouseDown={() => {
+            deleteComponent(entityId, name)
+          }}
+        />
+      </UiEntity>
     )
     if (expanded) {
       rows.push(valueRow(entityId, name, components[name]))
@@ -697,14 +710,15 @@ function entityNode(
   )
   const compCount = Object.keys(components).length
   const childCount = childIds.length
-  const hasContent = compCount > 0 || childCount > 0
-  const expanded = hasContent && state.expandedEntities.has(entityId)
+  // The chevron now governs only child expansion — components live in the popup
+  // window, opened from the component badge.
+  const expanded = childCount > 0 && state.expandedEntities.has(entityId)
 
   const childPath = new Set(path)
   childPath.add(entityId)
 
   const label =
-    `${entityLabel(entityId)}   ${compCount}c${childCount > 0 ? ` · ${childCount}▼` : ''}`
+    `${entityLabel(entityId)}${childCount > 0 ? `   ${childCount}▼` : ''}`
 
   return (
     <UiEntity
@@ -724,9 +738,9 @@ function entityNode(
       >
         <UiEntity
           uiTransform={{ width: 18, height: ROW_H, justifyContent: 'center', alignItems: 'center' }}
-          uiText={{ value: hasContent ? chevron(expanded) : '·', fontSize: FS, color: MUTED }}
+          uiText={{ value: childCount > 0 ? chevron(expanded) : '·', fontSize: FS, color: MUTED }}
           onMouseDown={() => {
-            if (hasContent) toggleEntity(entityId)
+            if (childCount > 0) toggleEntity(entityId)
           }}
         />
         <UiEntity
@@ -740,6 +754,7 @@ function entityNode(
             )
           }}
         />
+        {componentsBadge(entityId, compCount)}
         {Number(entityId) >= 512 ? deleteButton(entityId) : []}
       </UiEntity>
       {expanded && (
@@ -750,12 +765,40 @@ function entityNode(
             padding: { left: INDENT }
           }}
         >
-          {componentNodes(entityId, components)}
           {childIds.map((c) => entityNode(forest, c, childPath))}
         </UiEntity>
       )}
     </UiEntity>
   )
+}
+
+// Inline tree badge showing an entity's component count; opens its component
+// window. Highlighted while that entity's window is the open one.
+function componentsBadge(entityId: string, count: number): ReactEcs.JSX.Element {
+  const open = state.componentWindow === entityId
+  return (
+    <UiEntity
+      uiTransform={{
+        width: 48,
+        height: 20,
+        margin: { right: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: open ? BUTTON_BG : VALUE_BG }}
+      uiText={{ value: `▦ ${count}`, fontSize: FS - 3, color: open ? TEXT : MUTED }}
+      onMouseDown={() => {
+        openComponentWindow(entityId)
+      }}
+    />
+  )
+}
+
+// Open (or switch) the component window onto an entity, resetting the add picker.
+function openComponentWindow(entityId: string): void {
+  state.componentWindow = entityId
+  state.addComponentOpen = false
+  state.addComponentFilter = ''
 }
 
 // Reachable-from-roots set, computed independently of expansion so that the
@@ -1338,6 +1381,219 @@ function deleteDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Scrollable, filterable list of addable components (those not already on the
+// entity). Falls back to a free-text name input when the catalog is unavailable
+// (e.g. an older engine without /component_names).
+function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
+  const existing = new Set(Object.keys(state.snapshot[entityId] ?? {}))
+  const filter = state.addComponentFilter.toLowerCase()
+  const matches = state.componentNames
+    .filter((n) => !existing.has(n) && n.toLowerCase().includes(filter))
+    .slice(0, 100)
+  const haveCatalog = state.componentNames.length > 0
+
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        flexDirection: 'column',
+        padding: 6,
+        margin: { bottom: 6 }
+      }}
+      uiBackground={{ color: VALUE_BG }}
+    >
+      <Input
+        key={`add-filter:${entityId}`}
+        uiTransform={{
+          elementId: 'add-component-filter',
+          width: '100%',
+          height: 24,
+          margin: { bottom: 4 },
+          padding: { left: 4, right: 4 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        value={state.addComponentFilter}
+        placeholder={haveCatalog ? 'filter components…' : 'ComponentName (e.g. MeshRenderer)'}
+        fontSize={FS - 1}
+        color={TEXT}
+        textAlign="middle-left"
+        onChange={(v) => {
+          state.addComponentFilter = v
+        }}
+        onSubmit={
+          haveCatalog
+            ? undefined
+            : (v) => {
+                const name = v.trim()
+                if (name !== '') {
+                  addComponent(entityId, name).catch(console.error)
+                  state.addComponentOpen = false
+                  state.addComponentFilter = ''
+                }
+              }
+        }
+      />
+      {haveCatalog ? (
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 200,
+            flexDirection: 'column',
+            overflow: 'scroll'
+          }}
+        >
+          {matches.length > 0
+            ? matches.map((name) => (
+                <UiEntity
+                  key={`add-${name}`}
+                  uiTransform={{
+                    width: '100%',
+                    height: ROW_H,
+                    margin: { bottom: 1 },
+                    padding: { left: 6 },
+                    alignItems: 'center'
+                  }}
+                  uiBackground={{ color: ENTITY_BG }}
+                  uiText={{ value: name, fontSize: FS - 1, color: TEXT, textAlign: 'middle-left' }}
+                  onMouseDown={() => {
+                    addComponent(entityId, name).catch(console.error)
+                    state.addComponentOpen = false
+                    state.addComponentFilter = ''
+                  }}
+                />
+              ))
+            : [
+                <UiEntity
+                  key="add-none"
+                  uiTransform={{ width: '100%', height: ROW_H, padding: { left: 6 }, alignItems: 'center' }}
+                  uiText={{ value: 'no matching components', fontSize: FS - 2, color: MUTED, textAlign: 'middle-left' }}
+                />
+              ]}
+        </UiEntity>
+      ) : (
+        <UiEntity
+          uiTransform={{ width: '100%', height: 18, alignItems: 'center' }}
+          uiText={{
+            value: 'type a component name and press Enter',
+            fontSize: FS - 3,
+            color: MUTED,
+            textAlign: 'middle-left'
+          }}
+        />
+      )}
+    </UiEntity>
+  )
+}
+
+// Floating popup that hosts an entity's components (moved out of the tree). Lets
+// you expand/edit each component, delete components, and add new ones.
+function componentWindowPanel(): ReactEcs.JSX.Element | null {
+  const id = state.componentWindow
+  if (id === null) return null
+  const components = state.snapshot[id] ?? {}
+  const count = Object.keys(components).length
+
+  return (
+    <UiEntity
+      uiTransform={{
+        width: 460,
+        height: '92%',
+        positionType: 'absolute',
+        position: { top: '4%', left: 12 },
+        flexDirection: 'column',
+        pointerFilter: 'block'
+      }}
+      uiBackground={{ color: PANEL_BG }}
+    >
+      {/* Header */}
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: 36,
+          flexDirection: 'row',
+          alignItems: 'center',
+          padding: { left: 10, right: 6 }
+        }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ flexGrow: 1, height: 22, alignItems: 'center' }}
+          uiText={{
+            value: `Components · ${entityLabel(id)}`,
+            fontSize: FS + 1,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: 26, height: 24, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: REVERT_BG }}
+          uiText={{ value: '✕', fontSize: FS, color: TEXT }}
+          onMouseDown={() => {
+            state.componentWindow = null
+          }}
+        />
+      </UiEntity>
+
+      {/* Add-component control + (when open) the picker */}
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          flexDirection: 'column',
+          padding: { left: 6, right: 6, top: 6 }
+        }}
+      >
+        <UiEntity
+          uiTransform={{ width: 140, height: 24, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: state.addComponentOpen ? BUTTON_BG : TOGGLE_ON }}
+          uiText={{
+            value: state.addComponentOpen ? 'Cancel add' : '+ Add Component',
+            fontSize: FS - 2,
+            color: TEXT
+          }}
+          onMouseDown={() => {
+            state.addComponentOpen = !state.addComponentOpen
+            state.addComponentFilter = ''
+          }}
+        />
+        {state.addComponentOpen ? (
+          <UiEntity uiTransform={{ width: '100%', flexDirection: 'column', margin: { top: 6 } }}>
+            {addComponentPicker(id)}
+          </UiEntity>
+        ) : (
+          []
+        )}
+      </UiEntity>
+
+      {/* Component list */}
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          flexDirection: 'column',
+          padding: 6,
+          overflow: 'scroll'
+        }}
+      >
+        {count > 0
+          ? componentNodes(id, components)
+          : [
+              <UiEntity
+                key="no-components"
+                uiTransform={{ width: '100%', height: ROW_H, padding: { left: 4 }, alignItems: 'center' }}
+                uiText={{
+                  value: 'no components — add one above',
+                  fontSize: FS - 1,
+                  color: MUTED,
+                  textAlign: 'middle-left'
+                }}
+              />
+            ]}
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 export function inspectorUi(): ReactEcs.JSX.Element {
   // Pending jump-to-row target (held briefly by selectEntityInTree, then
   // released so the user can scroll freely).
@@ -1482,6 +1738,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       )}
       </UiEntity>
 
+      {componentWindowPanel() ?? []}
       {deleteDialog() ?? []}
       {parentDialog() ?? []}
     </UiEntity>

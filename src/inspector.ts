@@ -4,6 +4,7 @@ import { getCurrentInspectableScene } from './current-scene'
 import {
   state,
   clearComponentEdits,
+  componentKey,
   primeScroll,
   parentOf,
   topLevelSelected,
@@ -21,6 +22,8 @@ export async function startInspector(): Promise<void> {
   state.status = 'logging-in'
   await autoLogin()
   await refresh()
+  // Best-effort, independent of the scene — populates the add-component picker.
+  loadComponentNames().catch(console.error)
 }
 
 // Resolve the current non-portable scene, pin it as the inspection target, then
@@ -168,12 +171,70 @@ function removeLocal(id: string, recursive: boolean): void {
     for (const child of directChildren(cur)) stack.push(child)
   }
   for (const r of all) delete state.snapshot[r]
+  // Close the component window if its entity was removed.
+  if (state.componentWindow !== null && !(state.componentWindow in state.snapshot)) {
+    state.componentWindow = null
+  }
 }
 
 // Send a delete and reflect it locally (optimistic).
 async function writeDelete(id: string, recursive: boolean): Promise<void> {
   removeLocal(id, recursive)
   await BevyApi.consoleCommand('delete_entity', recursive ? [id, '-r'] : [id])
+}
+
+// --- add / delete component ---
+
+// Fetch the catalog of editable component names (for the add-component picker).
+// Best-effort: leaves the list empty (free-text fallback) on failure.
+export async function loadComponentNames(): Promise<void> {
+  try {
+    const reply = await BevyApi.consoleCommand('component_names')
+    const names = JSON.parse(reply) as unknown
+    if (Array.isArray(names)) state.componentNames = names.filter((n) => typeof n === 'string')
+  } catch (e) {
+    console.error('component_names failed:', e)
+  }
+}
+
+// Add a component, seeded with its full default shape. /component_default returns
+// every field at its zero/default (serde emits the full tree — unset scalars 0/""/
+// false, optional/message/oneof null, repeated []), so the field editor has all the
+// fields to edit immediately, even while paused (the write itself still encodes the
+// proto default). Falls back to `{}` if the default fetch fails. The new component is
+// expanded so it's ready to edit. No-op if the entity already has it.
+export async function addComponent(entityId: string, name: string): Promise<void> {
+  if (state.snapshot[entityId]?.[name] !== undefined) return
+  const key = componentKey(entityId, name)
+  state.expandedComponents.add(key)
+
+  let json = '{}'
+  try {
+    const reply = await BevyApi.consoleCommand('component_default', [name])
+    JSON.parse(reply) // validate before adopting it
+    json = reply
+  } catch (e) {
+    console.error('component_default failed (using {}):', name, e)
+  }
+
+  try {
+    await writeComponent(entityId, name, json)
+    await reloadAfter()
+  } catch (e) {
+    console.error('add_component failed:', name, e)
+  }
+}
+
+// Remove a component from an entity (optimistic local removal + /delete_component).
+export function deleteComponent(entityId: string, name: string): void {
+  const entry = state.snapshot[entityId]
+  if (entry !== undefined) delete entry[name]
+  const key = componentKey(entityId, name)
+  state.expandedComponents.delete(key)
+  clearComponentEdits(key)
+  BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) => {
+    console.error('delete_component failed:', name, e)
+  })
 }
 
 // Write a component value via /set_component, then refresh so the tree reflects
