@@ -217,7 +217,12 @@ function numberInput(
   width: number
 ): ReactEcs.JSX.Element {
   return (
+    // Key on the snapshot value: DCL inputs keep their own text once mounted (and
+    // capture it back on the next change), so persisting across an external/tool
+    // edit would freeze + dirty the field. Re-mounting on a value change shows the
+    // fresh value; the key is stable while typing (snapshot unchanged).
     <Input
+      key={`${path}:${value}`}
       uiTransform={{
         elementId: elementIdFor(key, path),
         width,
@@ -311,6 +316,7 @@ function stringField(
     >
       {fieldLabel(label, 150)}
       <Input
+        key={`${path}:${value}`}
         uiTransform={{
           elementId: elementIdFor(key, path),
           width: 200,
@@ -544,6 +550,7 @@ function rawEditor(
   const dirty = state.drafts.has(key) && draft !== valueJson(value)
   return (
     <Input
+      key={`raw:${key}:${valueJson(value)}`}
       uiTransform={{
         elementId: `raw-${elementIdFor(key, '')}`,
         width: '100%',

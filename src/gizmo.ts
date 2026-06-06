@@ -21,7 +21,7 @@ import {
 } from './world-pos'
 import { rotateVec3ByQuat } from './perspective-to-screen'
 import { cameraFovY, projectWorldToScreen } from './camera-projection'
-import { fireTransform, syncAfterDrag } from './inspector'
+import { fireTransform, syncAfterDrag, mergeKeepingOrder } from './inspector'
 
 // A render layer that only the gizmo camera draws, so gizmo meshes render
 // isolated from (and composited on top of) the world.
@@ -831,9 +831,9 @@ function applyGroup(
     fireTransform(g.id, JSON.stringify(transform))
     // Optimistically reflect the write in the local snapshot so a follow-up read
     // (a new drag, the tree, markers) sees it immediately, without waiting for
-    // the post-drag reload. reloadAfter confirms it shortly after.
+    // the post-drag reload. Merge to keep the CRDT field order (parent first).
     const entry = state.snapshot[g.id] ?? (state.snapshot[g.id] = {})
-    entry.Transform = transform
+    entry.Transform = mergeKeepingOrder(entry.Transform, transform)
   }
 }
 

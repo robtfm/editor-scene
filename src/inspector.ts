@@ -107,18 +107,73 @@ export async function reloadSnapshot(): Promise<void> {
 }
 
 // Reload after a modification. /crdt_snapshot reads the scene's CRDT store, which
-// only reflects our engine-side edits on the scene's next tick — so reload after
-// a short settle. For deletes, retry until the removed ids actually disappear
-// (bounded), so the tree can't keep showing a gone entity.
+// only reflects our edits on the scene's next tick — so reload after a short
+// settle. For deletes, retry until the removed ids actually disappear (bounded),
+// so the tree can't keep showing a gone entity.
+//
+// A paused scene never ticks, so it never applies our inbound messages and
+// /crdt_snapshot would return the pre-edit state. We instead keep the optimistic
+// local snapshot (every edit updates it; see writeComponent/writeDelete) and
+// skip the refetch entirely while frozen.
 const SETTLE_MS = 150
 async function reloadAfter(goneIds: string[] = []): Promise<void> {
+  if (state.frozen) return
   for (let attempt = 0; attempt < 6; attempt++) {
     await sleep(SETTLE_MS)
     await reloadSnapshot()
-    // A frozen scene won't tick, so the change can't propagate to its store and
-    // retrying is pointless — settle once and stop.
-    if (state.frozen || goneIds.every((id) => !(id in state.snapshot))) return
+    if (goneIds.every((id) => !(id in state.snapshot))) return
   }
+}
+
+// Apply a component write to the local snapshot so the edit shows immediately,
+// independent of whether/when the scene ticks it into its CRDT store. Merge into
+// the existing value (rather than replace) so the field key order matches the
+// CRDT snapshot — otherwise e.g. Transform.parent would jump in the editor list.
+function applyLocalComponent(entityId: string, name: string, json: string): void {
+  try {
+    const value = JSON.parse(json) as unknown
+    const entry = state.snapshot[entityId] ?? (state.snapshot[entityId] = {})
+    const existing = entry[name]
+    entry[name] = mergeKeepingOrder(existing, value)
+  } catch {
+    /* leave the snapshot unchanged on unparseable json */
+  }
+}
+
+// `{ ...existing, ...value }` for plain objects (keeping existing's key order),
+// else just `value`. Exported for the gizmo's optimistic writes.
+export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+  return isObj(existing) && isObj(value) ? { ...existing, ...value } : value
+}
+
+// Send a component write and reflect it locally (optimistic).
+async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
+  applyLocalComponent(entityId, name, json)
+  await BevyApi.consoleCommand('set_component', [entityId, name, json])
+}
+
+// Remove an entity (and, recursively, its descendants) from the local snapshot.
+function removeLocal(id: string, recursive: boolean): void {
+  if (!recursive) {
+    delete state.snapshot[id]
+    return
+  }
+  const all: string[] = []
+  const stack = [id]
+  while (stack.length > 0) {
+    const cur = stack.pop() as string
+    all.push(cur)
+    for (const child of directChildren(cur)) stack.push(child)
+  }
+  for (const r of all) delete state.snapshot[r]
+}
+
+// Send a delete and reflect it locally (optimistic).
+async function writeDelete(id: string, recursive: boolean): Promise<void> {
+  removeLocal(id, recursive)
+  await BevyApi.consoleCommand('delete_entity', recursive ? [id, '-r'] : [id])
 }
 
 // Write a component value via /set_component, then refresh so the tree reflects
@@ -139,7 +194,7 @@ export async function setComponentValue(
   }
 
   try {
-    await BevyApi.consoleCommand('set_component', [entityId, name, compact])
+    await writeComponent(entityId, name, compact)
     state.editStatus.set(key, '✓ set')
     clearComponentEdits(key)
     await reloadAfter()
@@ -227,7 +282,7 @@ export function childIdsOf(id: string): string[] {
 export async function deleteEntity(id: string): Promise<void> {
   state.deleteConfirm = null
   try {
-    await BevyApi.consoleCommand('delete_entity', [id])
+    await writeDelete(id, false)
   } catch (e) {
     console.error('delete_entity failed:', e)
   }
@@ -237,7 +292,7 @@ export async function deleteEntity(id: string): Promise<void> {
 export async function deleteEntityRecursive(id: string): Promise<void> {
   state.deleteConfirm = null
   try {
-    await BevyApi.consoleCommand('delete_entity', [id, '-r'])
+    await writeDelete(id, true)
   } catch (e) {
     console.error('delete_entity -r failed:', e)
   }
@@ -252,13 +307,13 @@ export async function deleteEntityReparent(id: string): Promise<void> {
   for (const childId of directChildren(id)) {
     const json = composeIntoGrandparent(parentT, readTransform(childId), parentT.parent)
     try {
-      await BevyApi.consoleCommand('set_component', [childId, 'Transform', json])
+      await writeComponent(childId, 'Transform', json)
     } catch (e) {
       console.error('reparent child failed:', childId, e)
     }
   }
   try {
-    await BevyApi.consoleCommand('delete_entity', [id])
+    await writeDelete(id, false)
   } catch (e) {
     console.error('delete_entity failed:', e)
   }
@@ -295,7 +350,7 @@ export async function reparentSelectionToActive(): Promise<void> {
     const local = localRelativeTo(snap, c, active)
     const json = JSON.stringify({ ...local, parent: Number(active) })
     try {
-      await BevyApi.consoleCommand('set_component', [c, 'Transform', json])
+      await writeComponent(c, 'Transform', json)
     } catch (e) {
       console.error('reparent failed:', c, e)
     }
@@ -314,7 +369,7 @@ export async function clearParentOfSelection(): Promise<void> {
     const local = localRelativeTo(snap, id, '0')
     const json = JSON.stringify({ ...local, parent: 0 })
     try {
-      await BevyApi.consoleCommand('set_component', [id, 'Transform', json])
+      await writeComponent(id, 'Transform', json)
     } catch (e) {
       console.error('clear parent failed:', id, e)
     }
