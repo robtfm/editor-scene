@@ -23,6 +23,7 @@ import {
 } from './state'
 import { overlayUi } from './overlay'
 import { isWorldScaleNonUniform } from './world-pos'
+import { toggleFreeCam, orientToAxis } from './free-cam'
 import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
 import { relationsCameraEntity } from './relations'
 import {
@@ -976,6 +977,61 @@ function linksButton(): ReactEcs.JSX.Element {
   })
 }
 
+// Small fixed-width button (used for the camera axis-orient controls).
+function miniButton(
+  key: string,
+  label: string,
+  enabled: boolean,
+  onClick: () => void
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={key}
+      uiTransform={{
+        width: 34,
+        height: 22,
+        margin: { left: 4 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: REVERT_BG }}
+      uiText={{ value: label, fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
+      onMouseDown={() => {
+        if (enabled) onClick()
+      }}
+    />
+  )
+}
+
+// Free-cam toggle + (when active) buttons to snap the camera onto each world
+// axis, framing the active selection.
+const AXES: Array<{ label: string; axis: 'x' | 'y' | 'z'; sign: number }> = [
+  { label: '+X', axis: 'x', sign: 1 },
+  { label: '-X', axis: 'x', sign: -1 },
+  { label: '+Y', axis: 'y', sign: 1 },
+  { label: '-Y', axis: 'y', sign: -1 },
+  { label: '+Z', axis: 'z', sign: 1 },
+  { label: '-Z', axis: 'z', sign: -1 }
+]
+function cameraControls(): ReactEcs.JSX.Element[] {
+  const out: ReactEcs.JSX.Element[] = [
+    toggleChip('free-cam', state.freeCam ? 'Free Cam: On' : 'Free Cam: Off', () => {
+      toggleFreeCam()
+    })
+  ]
+  if (state.freeCam) {
+    const canOrient = state.activeEntity !== null
+    for (const a of AXES) {
+      out.push(
+        miniButton(`axis-${a.label}`, a.label, canOrient, () => {
+          orientToAxis(a.axis, a.sign)
+        })
+      )
+    }
+  }
+  return out
+}
+
 // A thin vertical divider with surrounding space, to group toolbar sections.
 function toolbarDivider(key: string): ReactEcs.JSX.Element {
   return (
@@ -1014,6 +1070,8 @@ function controlPanel(): ReactEcs.JSX.Element {
         {toolbarDivider('div-view')}
         {nodeDisplayButton()}
         {linksButton()}
+        {toolbarDivider('div-cam')}
+        {cameraControls()}
       </UiEntity>
     </UiEntity>
   )

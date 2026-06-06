@@ -45,6 +45,8 @@ export const state = {
   nodeDisplay: 'selecting' as 'always' | 'selected' | 'selecting',
   // whether to draw parent/child relationship links
   showLinks: true,
+  // whether free-cam mode is active (detached fly camera, avatar movement off)
+  freeCam: false,
   // entity whose world marker is hovered (for the id tooltip), or null
   hoveredOverlay: null as string | null,
   // scroll-to target for the tree body: a row elementId (reference) or a literal
