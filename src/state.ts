@@ -42,7 +42,7 @@ export const state = {
   lastTool: 'translate' as 'translate' | 'rotate' | 'scale',
   // when to draw node markers: 'always' (all nodes), 'selected' (only selected),
   // 'selecting' (only while in select mode). Select mode always shows all nodes.
-  nodeDisplay: 'selecting' as 'always' | 'selected' | 'selecting',
+  nodeDisplay: 'selected' as 'always' | 'selected' | 'selecting',
   // whether to draw parent/child relationship links
   showLinks: true,
   // active camera mode: 'none' (player), 'free' (fly), or 'target' (orbit the
