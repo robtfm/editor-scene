@@ -66,6 +66,10 @@ export const state = {
   addComponentFilter: '',
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
+  // per-component typed schema (from /component_schema), keyed by component name
+  schemas: new Map<string, unknown>(),
+  // component names whose schema fetch is in flight (avoid duplicate requests)
+  schemaPending: new Set<string>(),
   // true while the non-uniform-parent reparent confirm dialog is open
   parentConfirm: false,
   // entity id whose delete button is hovered (for the modifier tooltip), or null

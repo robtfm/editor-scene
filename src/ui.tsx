@@ -55,6 +55,17 @@ import {
   currentString,
   setField
 } from './fields'
+import {
+  ensureSchema,
+  getSchema,
+  buildFromSchema,
+  effectiveDefault,
+  valueAt,
+  activeCase,
+  setCase,
+  type ComponentSchema,
+  type SchemaNode
+} from './schema'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
 const HEADER_BG = Color4.create(0.14, 0.14, 0.18, 1)
@@ -574,6 +585,286 @@ function rawEditor(
   )
 }
 
+// --- schema-driven editor (typed widgets from /component_schema) ---
+
+function numFallback(base: unknown, node: Extract<SchemaNode, { kind: 'leaf' }>): number {
+  if (typeof base === 'number') return base
+  if (typeof node.default === 'number') return node.default
+  return 0
+}
+function strFallback(base: unknown, node: Extract<SchemaNode, { kind: 'leaf' }>): string {
+  if (typeof base === 'string') return base
+  if (typeof node.default === 'string') return node.default
+  return ''
+}
+function objFallback(base: unknown, node: Extract<SchemaNode, { kind: 'leaf' }>, axes: string[]): Record<string, number> {
+  const src =
+    base !== null && typeof base === 'object'
+      ? (base as Record<string, unknown>)
+      : node.default !== null && typeof node.default === 'object'
+        ? (node.default as Record<string, unknown>)
+        : {}
+  const out: Record<string, number> = {}
+  for (const a of axes) out[a] = typeof src[a] === 'number' ? (src[a] as number) : a === 'w' ? 1 : 0
+  return out
+}
+
+// A short "(unit · min..max · unset)" hint appended to a leaf's label.
+function leafHint(node: Extract<SchemaNode, { kind: 'leaf' }>, unset: boolean): string {
+  const parts: string[] = []
+  const unit = node.semantic.split(':')[1]
+  if (unit !== undefined && node.semantic.split(':')[0] === 'number') parts.push(unit)
+  if (node.range !== undefined) {
+    const { min, max } = node.range
+    parts.push(`${min ?? ''}..${max ?? ''}`)
+  }
+  if (unset) parts.push('unset')
+  return parts.length > 0 ? `  (${parts.join(' · ')})` : ''
+}
+
+function enumRow(
+  schema: ComponentSchema,
+  key: ComponentKey,
+  path: string,
+  label: string,
+  enumName: string | undefined,
+  fallback: number
+): ReactEcs.JSX.Element {
+  const vals = (enumName !== undefined ? schema.enums[enumName] : undefined) ?? []
+  const cur = currentNumber(key, path, fallback)
+  const idx = vals.findIndex(([, n]) => n === cur)
+  const display = idx >= 0 ? vals[idx][0] : String(cur)
+  const step = (dir: number): void => {
+    if (vals.length === 0) return
+    const next = vals[(idx + dir + vals.length) % vals.length]
+    setField(key, path, String(next[1]))
+  }
+  return (
+    <UiEntity
+      key={path}
+      uiTransform={{ width: '100%', height: 24, flexDirection: 'row', alignItems: 'center', margin: { bottom: 2 } }}
+    >
+      {fieldLabel(label, 150)}
+      <UiEntity
+        uiTransform={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}
+        uiBackground={{ color: REVERT_BG }}
+        uiText={{ value: '◀', fontSize: FS - 2, color: TEXT }}
+        onMouseDown={() => step(-1)}
+      />
+      <UiEntity
+        uiTransform={{ width: 200, height: 22, alignItems: 'center', justifyContent: 'center', margin: { left: 2, right: 2 } }}
+        uiBackground={{ color: VALUE_BG }}
+        uiText={{ value: display, fontSize: FS - 2, color: TEXT }}
+        onMouseDown={() => step(1)}
+      />
+      <UiEntity
+        uiTransform={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}
+        uiBackground={{ color: REVERT_BG }}
+        uiText={{ value: '▶', fontSize: FS - 2, color: TEXT }}
+        onMouseDown={() => step(1)}
+      />
+    </UiEntity>
+  )
+}
+
+function bitmaskRow(
+  schema: ComponentSchema,
+  key: ComponentKey,
+  path: string,
+  label: string,
+  enumName: string | undefined,
+  fallback: number
+): ReactEcs.JSX.Element {
+  const vals = (enumName !== undefined ? schema.enums[enumName] : undefined) ?? []
+  const cur = currentNumber(key, path, fallback)
+  const flags = vals.filter(([, n]) => n > 0 && (n & (n - 1)) === 0) // power-of-two only
+  return (
+    <UiEntity
+      key={path}
+      uiTransform={{ width: '100%', flexDirection: 'column', margin: { bottom: 2 } }}
+    >
+      <UiEntity uiTransform={{ width: '100%', height: 22, alignItems: 'center' }}>
+        {fieldLabel(label, 300)}
+      </UiEntity>
+      <UiEntity
+        uiTransform={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', padding: { left: 8 } }}
+      >
+        {flags.map(([nm, bit]) => {
+          const on = (cur & bit) !== 0
+          return (
+            <UiEntity
+              key={nm}
+              uiTransform={{ width: 120, height: 22, margin: { right: 4, bottom: 2 }, alignItems: 'center', justifyContent: 'center' }}
+              uiBackground={{ color: on ? TOGGLE_ON : TOGGLE_OFF }}
+              uiText={{ value: nm, fontSize: FS - 3, color: TEXT }}
+              onMouseDown={() => {
+                setField(key, path, String(cur ^ bit))
+              }}
+            />
+          )
+        })}
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
+// Raw single-line JSON editor for a composite leaf (textureUnion/borderRect) — PoC.
+function rawFieldRow(
+  key: ComponentKey,
+  path: string,
+  label: string,
+  base: unknown
+): ReactEcs.JSX.Element {
+  const fallback = base === undefined ? 'null' : JSON.stringify(base)
+  const cur = currentString(key, path, fallback)
+  return (
+    <UiEntity
+      key={path}
+      uiTransform={{ width: '100%', height: 24, flexDirection: 'row', alignItems: 'center', margin: { bottom: 2 } }}
+    >
+      {fieldLabel(label, 150)}
+      <Input
+        key={`${path}:${fallback}`}
+        uiTransform={{ elementId: elementIdFor(key, path), width: 200, height: 22, padding: { left: 4, right: 4 } }}
+        uiBackground={{ color: VALUE_BG }}
+        value={cur}
+        fontSize={FS - 1}
+        color={TEXT}
+        textAlign="middle-left"
+        font="monospace"
+        onChange={(v) => {
+          setField(key, path, v)
+        }}
+      />
+    </UiEntity>
+  )
+}
+
+function schemaLeaf(
+  schema: ComponentSchema,
+  key: ComponentKey,
+  rawNode: Extract<SchemaNode, { kind: 'leaf' }>,
+  path: string,
+  value: unknown
+): ReactEcs.JSX.Element {
+  const base = valueAt(value, path)
+  // resolve dynamic (@transform.*) defaults so render matches what Apply will write
+  const node = { ...rawNode, default: effectiveDefault(key, rawNode) }
+  // "unset" = optional, absent/null, and no curated default → Apply writes null (the engine
+  // applies its own runtime default). Fields with a curated default show that value instead.
+  const unset =
+    (base === undefined || base === null) &&
+    node.optional === true &&
+    node.default === undefined
+  const label = (node.name ?? '') + leafHint(node, unset)
+  const sem0 = node.semantic.split(':')[0]
+  switch (sem0) {
+    case 'bool':
+      return boolField(key, path, label, typeof base === 'boolean' ? base : node.default === true)
+    case 'enum':
+      return enumRow(schema, key, path, label, node.enum, numFallback(base, node))
+    case 'bitmask':
+      return bitmaskRow(schema, key, path, label, node.semantic.split(':')[1], numFallback(base, node))
+    case 'color3':
+      return colorField(key, path, label, objFallback(base, node, ['r', 'g', 'b']) as { r: number; g: number; b: number })
+    case 'color4':
+      return colorField(key, path, label, objFallback(base, node, ['r', 'g', 'b', 'a']) as { r: number; g: number; b: number; a: number })
+    case 'vector2':
+      return vectorField(key, path, label, objFallback(base, node, ['x', 'y']))
+    case 'vector3':
+      return vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z']))
+    case 'quaternion':
+      return vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z', 'w']))
+    case 'textureUnion':
+    case 'borderRect':
+      return rawFieldRow(key, path, label, base ?? node.default)
+    case 'string':
+    case 'url':
+    case 'urlOrContent':
+    case 'contentFile':
+    case 'urn':
+    case 'userRef':
+    case 'gltfNodePath':
+    case 'gltfAnimationName':
+      return stringField(key, path, label, strFallback(base, node))
+    default:
+      // number / int / uint / entityRef / cameraLayerId
+      return numberField(key, path, label, numFallback(base, node))
+  }
+}
+
+function renderSchemaNode(
+  schema: ComponentSchema,
+  key: ComponentKey,
+  node: SchemaNode,
+  path: string,
+  value: unknown
+): ReactEcs.JSX.Element {
+  switch (node.kind) {
+    case 'message': {
+      const children = node.fields.map((f) =>
+        renderSchemaNode(schema, key, f, joinPath(path, f.name ?? ''), value)
+      )
+      return group(path === '' ? '' : path, path === '' ? '' : (node.name ?? ''), children)
+    }
+    case 'oneof': {
+      const active = activeCase(key, path, node, value)
+      const selector = (
+        <UiEntity
+          key={`${path}/cases`}
+          uiTransform={{ width: '100%', flexDirection: 'row', flexWrap: 'wrap', margin: { bottom: 2 } }}
+        >
+          {fieldLabel(`${node.name ?? ''} (oneof)`, 120)}
+          {node.cases.map((c) => (
+            <UiEntity
+              key={c.name}
+              uiTransform={{ width: 96, height: 22, margin: { right: 4, bottom: 2 }, alignItems: 'center', justifyContent: 'center' }}
+              uiBackground={{ color: c.name === active ? BUTTON_BG : REVERT_BG }}
+              uiText={{ value: c.name, fontSize: FS - 3, color: TEXT }}
+              onMouseDown={() => {
+                setCase(key, path, c.name)
+              }}
+            />
+          ))}
+        </UiEntity>
+      )
+      const activeCaseNode = node.cases.find((c) => c.name === active)
+      const body =
+        activeCaseNode !== undefined
+          ? renderSchemaNode(schema, key, activeCaseNode.field, joinPath(path, active as string), value)
+          : []
+      return (
+        <UiEntity key={path} uiTransform={{ width: '100%', flexDirection: 'column' }}>
+          {selector}
+          <UiEntity uiTransform={{ width: '100%', flexDirection: 'column', padding: { left: 10 } }}>
+            {body}
+          </UiEntity>
+        </UiEntity>
+      )
+    }
+    case 'repeated': {
+      const arr = valueAt(value, path)
+      const items = Array.isArray(arr) ? arr : []
+      const children = items.map((_, i) =>
+        renderSchemaNode(schema, key, node.element, joinPath(path, String(i)), value)
+      )
+      const body =
+        children.length > 0
+          ? children
+          : [
+              <UiEntity
+                key="empty"
+                uiTransform={{ width: '100%', height: 20, alignItems: 'center' }}
+                uiText={{ value: '(empty — add/remove via Raw for now)', fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
+              />
+            ]
+      return group(path, `${node.name ?? ''} [${items.length}]`, body)
+    }
+    case 'leaf':
+      return schemaLeaf(schema, key, node, path, value)
+  }
+}
+
 // Editor body for one component: toolbar (Apply / Revert / Raw-Fields / status)
 // plus either the structured editor or the raw-JSON input.
 function valueRow(
@@ -584,6 +875,9 @@ function valueRow(
   const key = componentKey(entityId, name)
   const raw = state.rawMode.has(key)
   const status = state.editStatus.get(key) ?? ''
+  // Pull the typed schema (lazily fetched); when present it drives the field editor.
+  ensureSchema(name)
+  const schema = state.rawMode.has(key) ? undefined : getSchema(name)
 
   return (
     <UiEntity
@@ -609,6 +903,13 @@ function valueRow(
             setComponentValue(key, entityId, name, getDraft(key, value)).catch(
               console.error
             )
+          } else if (schema !== undefined) {
+            const built = buildFromSchema(key, schema, value)
+            if (built.ok) {
+              setComponentValue(key, entityId, name, built.json).catch(console.error)
+            } else {
+              state.editStatus.set(key, built.error)
+            }
           } else {
             applyStructuredEdits(key, entityId, name, value).catch(console.error)
           }
@@ -632,7 +933,11 @@ function valueRow(
           }}
         />
       </UiEntity>
-      {raw ? rawEditor(key, entityId, name, value) : renderField(key, '', '', value)}
+      {raw
+        ? rawEditor(key, entityId, name, value)
+        : schema !== undefined
+          ? renderSchemaNode(schema, key, schema.root, '', value)
+          : renderField(key, '', '', value)}
     </UiEntity>
   )
 }
