@@ -1,6 +1,6 @@
 import { BevyApi } from './bevy-api'
 import { state, type ComponentKey } from './state'
-import { fieldKey, currentNumber } from './fields'
+import { fieldKey, currentNumber, setFieldProgrammatic, joinPath } from './fields'
 
 // channel layouts for the composite leaves, edited via per-channel widgets
 const CHANNELS: Record<string, string[]> = {
@@ -67,6 +67,74 @@ export function effectiveDefault(
   }
 }
 
+// For a leaf seeded from the entity's Transform (`@transform.*` default), the source field
+// name (position/rotation/scale), else null — used to offer a "copy from Transform" button.
+export function transformDefaultKind(
+  node: Extract<SchemaNode, { kind: 'leaf' }>
+): string | null {
+  const d = node.default
+  return typeof d === 'string' && d.startsWith('@transform.')
+    ? d.slice('@transform.'.length)
+    : null
+}
+
+// Copy the entity's *current* Transform value into this field (as per-channel edits, with a
+// revision bump so the Inputs re-mount), so a rotate/move/scale Tween's start/end can
+// capture the entity's current placement on demand.
+export function copyFromTransform(
+  key: ComponentKey,
+  path: string,
+  node: Extract<SchemaNode, { kind: 'leaf' }>
+): void {
+  const v = effectiveDefault(key, node)
+  if (v === null || typeof v !== 'object') return
+  for (const [ch, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === 'number') setFieldProgrammatic(key, joinPath(path, ch), String(val))
+  }
+}
+
+// Whether any channel under `path` already has an edit (so a capture won't clobber it).
+function hasChannelEdit(key: ComponentKey, path: string): boolean {
+  const prefix = `${fieldKey(key, path)}.`
+  for (const k of state.fieldEdits.keys()) {
+    if (k.startsWith(prefix)) return true
+  }
+  return false
+}
+
+// One-time capture: for every `@transform.*` leaf in the currently-active branches (the
+// active oneof case at each level), seed it from the entity's current Transform — unless it
+// already has edits. Called when a component is added and when a oneof case is selected, so
+// e.g. a rotate Tween's start/end initialise to the current orientation and then stay put
+// (instead of live-tracking the transform).
+export function captureTransformDefaults(key: ComponentKey): void {
+  const [entityId, compName] = key.split('/')
+  const schema = getSchema(compName)
+  if (schema === undefined) return
+  const value = state.snapshot[entityId]?.[compName]
+
+  const walk = (node: SchemaNode, path: string): void => {
+    switch (node.kind) {
+      case 'message':
+        for (const f of node.fields) walk(f, joinPath(path, f.name ?? ''))
+        break
+      case 'oneof': {
+        const active = activeCase(key, path, node, value)
+        const c = node.cases.find((x) => x.name === active)
+        if (c !== undefined) walk(c.field, joinPath(path, active as string))
+        break
+      }
+      case 'leaf':
+        if (transformDefaultKind(node) !== null && !hasChannelEdit(key, path)) {
+          copyFromTransform(key, path, node)
+        }
+        break
+      // repeated: skip (no transform-seeded repeated leaves)
+    }
+  }
+  walk(schema.root, '')
+}
+
 // Fetch (once) the schema for a component, caching it. Best-effort.
 export function ensureSchema(name: string): void {
   if (state.schemas.has(name) || state.schemaPending.has(name)) return
@@ -120,6 +188,8 @@ export function activeCase(
 export function setCase(key: ComponentKey, path: string, caseName: string): void {
   state.fieldEdits.set(`${fieldKey(key, path)}#case`, caseName)
   state.editStatus.delete(key)
+  // seed any `@transform.*` fields in the newly-active case from the current Transform
+  captureTransformDefaults(key)
 }
 
 // Whether the subtree at `path` has any pending edit (used to decide null vs object

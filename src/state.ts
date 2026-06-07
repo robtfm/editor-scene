@@ -31,6 +31,10 @@ export const state = {
   // and strings stored as text (free typing), booleans as bool. Absent => the
   // snapshot leaf value verbatim.
   fieldEdits: new Map<string, string | boolean>(),
+  // per-leaf revision counter (same key as fieldEdits). Bumped on *programmatic* edits
+  // (copy/capture) to force the Input to re-mount and show the new value; NOT bumped while
+  // typing, so the cursor isn't lost.
+  fieldRev: new Map<string, number>(),
   // components currently editing as raw JSON instead of the structured editor
   rawMode: new Set<ComponentKey>(),
   // transient per-component result of the last Apply ('' => none)

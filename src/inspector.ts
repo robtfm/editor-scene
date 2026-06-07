@@ -12,6 +12,7 @@ import {
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
+import { getSchema, captureTransformDefaults } from './schema'
 import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
@@ -222,6 +223,19 @@ export async function addComponent(entityId: string, name: string): Promise<void
     await reloadAfter()
   } catch (e) {
     console.error('add_component failed:', name, e)
+  }
+
+  // Seed any `@transform.*` fields (e.g. a Tween's start/end) from the entity's current
+  // Transform once, so they capture the placement at creation instead of live-tracking it.
+  // Needs the schema; fetch it if it isn't cached yet.
+  try {
+    if (getSchema(name) === undefined) {
+      const reply = await BevyApi.consoleCommand('component_schema', [name])
+      state.schemas.set(name, JSON.parse(reply))
+    }
+    captureTransformDefaults(key)
+  } catch {
+    /* no schema → nothing to capture */
   }
 }
 

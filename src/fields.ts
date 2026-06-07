@@ -88,6 +88,24 @@ export function setField(
   state.editStatus.delete(componentKey)
 }
 
+// The leaf's re-mount revision (see state.fieldRev). Part of the Input's key so a
+// programmatic edit forces a fresh mount; typing leaves it untouched.
+export function fieldRev(componentKey: ComponentKey, path: string): number {
+  return state.fieldRev.get(fieldKey(componentKey, path)) ?? 0
+}
+
+// Set a leaf programmatically (copy/capture) and bump its revision so the Input re-mounts.
+export function setFieldProgrammatic(
+  componentKey: ComponentKey,
+  path: string,
+  value: string | boolean
+): void {
+  const k = fieldKey(componentKey, path)
+  state.fieldEdits.set(k, value)
+  state.fieldRev.set(k, (state.fieldRev.get(k) ?? 0) + 1)
+  state.editStatus.delete(componentKey)
+}
+
 export type BuildResult =
   | { ok: true; json: string }
   | { ok: false; error: string }

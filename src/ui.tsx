@@ -53,13 +53,16 @@ import {
   currentNumberText,
   currentBool,
   currentString,
-  setField
+  setField,
+  fieldRev
 } from './fields'
 import {
   ensureSchema,
   getSchema,
   buildFromSchema,
   effectiveDefault,
+  transformDefaultKind,
+  copyFromTransform,
   valueAt,
   activeCase,
   setCase,
@@ -232,9 +235,10 @@ function numberInput(
     // Key on the snapshot value: DCL inputs keep their own text once mounted (and
     // capture it back on the next change), so persisting across an external/tool
     // edit would freeze + dirty the field. Re-mounting on a value change shows the
-    // fresh value; the key is stable while typing (snapshot unchanged).
+    // fresh value; the key is stable while typing (snapshot unchanged). The fieldRev
+    // suffix lets a programmatic edit (copy/capture) force a re-mount too.
     <Input
-      key={`${path}:${value}`}
+      key={`${path}:${value}:${fieldRev(key, path)}`}
       uiTransform={{
         elementId: elementIdFor(key, path),
         width,
@@ -740,6 +744,36 @@ function rawFieldRow(
   )
 }
 
+// Append a "copy from Transform.<kind>" button under a field seeded from the entity's
+// Transform, so its value can capture the entity's current placement on demand.
+function withTransformCopy(
+  key: ComponentKey,
+  path: string,
+  rawNode: Extract<SchemaNode, { kind: 'leaf' }>,
+  widget: ReactEcs.JSX.Element
+): ReactEcs.JSX.Element {
+  const kind = transformDefaultKind(rawNode)
+  if (kind === null) return widget
+  return (
+    <UiEntity key={`${path}/wrap`} uiTransform={{ width: '100%', flexDirection: 'column' }}>
+      {widget}
+      <UiEntity
+        uiTransform={{ width: '100%', height: 22, flexDirection: 'row', alignItems: 'center', margin: { bottom: 2 } }}
+      >
+        {fieldLabel('', 150)}
+        <UiEntity
+          uiTransform={{ width: 200, height: 20, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: REVERT_BG }}
+          uiText={{ value: `⟵ copy Transform.${kind}`, fontSize: FS - 3, color: TEXT }}
+          onMouseDown={() => {
+            copyFromTransform(key, path, rawNode)
+          }}
+        />
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 function schemaLeaf(
   schema: ComponentSchema,
   key: ComponentKey,
@@ -772,9 +806,19 @@ function schemaLeaf(
     case 'vector2':
       return vectorField(key, path, label, objFallback(base, node, ['x', 'y']))
     case 'vector3':
-      return vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z']))
+      return withTransformCopy(
+        key,
+        path,
+        rawNode,
+        vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z']))
+      )
     case 'quaternion':
-      return vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z', 'w']))
+      return withTransformCopy(
+        key,
+        path,
+        rawNode,
+        vectorField(key, path, label, objFallback(base, node, ['x', 'y', 'z', 'w']))
+      )
     case 'textureUnion':
     case 'borderRect':
       return rawFieldRow(key, path, label, base ?? node.default)
