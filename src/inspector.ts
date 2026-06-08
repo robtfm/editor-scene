@@ -12,6 +12,13 @@ import {
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
+import {
+  decodeCustomComponents,
+  isCustomComponent,
+  customComponentId,
+  customTimestamp,
+  encodeCustomComponent
+} from './custom-components'
 import { getSchema, captureTransformDefaults } from './schema'
 import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
@@ -102,6 +109,7 @@ export async function reloadSnapshot(): Promise<void> {
   try {
     const reply = await BevyApi.consoleCommand('crdt_snapshot')
     state.snapshot = JSON.parse(reply) as Snapshot
+    decodeCustomComponents(state.snapshot)
     state.status = 'ready'
     primeScroll()
   } catch (e) {
@@ -152,9 +160,22 @@ export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
   return isObj(existing) && isObj(value) ? { ...existing, ...value } : value
 }
 
-// Send a component write and reflect it locally (optimistic).
+// Send a component write and reflect it locally (optimistic). Custom (non-engine-managed)
+// components — which the engine can't address by name — are encoded with the SDK schema and
+// written via /set_component_raw, carrying a timestamp newer than the snapshot's so the write
+// wins LWW. Everything else goes through /set_component as JSON.
 async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
   applyLocalComponent(entityId, name, json)
+  if (isCustomComponent(name)) {
+    const id = customComponentId(name)
+    const b64 = encodeCustomComponent(name, JSON.parse(json))
+    if (id === undefined || b64 === undefined) {
+      throw new Error(`cannot encode custom component ${name}`)
+    }
+    const ts = customTimestamp(entityId, name) + 1
+    await BevyApi.consoleCommand('set_component_raw', [entityId, String(id), String(ts), b64])
+    return
+  }
   await BevyApi.consoleCommand('set_component', [entityId, name, json])
 }
 

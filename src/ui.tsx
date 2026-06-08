@@ -69,6 +69,7 @@ import {
   type ComponentSchema,
   type SchemaNode
 } from './schema'
+import { entityName } from './custom-components'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
 const HEADER_BG = Color4.create(0.14, 0.14, 0.18, 1)
@@ -479,7 +480,9 @@ function readonlyField(
       }}
     >
       {fieldLabel(label, 150)}
-      {fieldLabel(JSON.stringify(value), 200)}
+      {/* JSON.stringify(undefined) is undefined, not a string — guard it so a stray
+          undefined leaf can't make a UI text value undefined and crash serialization. */}
+      {fieldLabel(JSON.stringify(value) ?? 'undefined', 200)}
     </UiEntity>
   )
 }
@@ -1066,8 +1069,10 @@ function entityNode(
   const childPath = new Set(path)
   childPath.add(entityId)
 
-  const label =
-    `${entityLabel(entityId)}${childCount > 0 ? `   ${childCount}▼` : ''}`
+  // Prefer the entity's authored name (core-schema::Name) when set, falling back to the id label.
+  const named = entityName(state.snapshot, entityId)
+  const baseLabel = named !== undefined ? `${named} (${entityId})` : entityLabel(entityId)
+  const label = `${baseLabel}${childCount > 0 ? `   ${childCount}▼` : ''}`
 
   return (
     <UiEntity
