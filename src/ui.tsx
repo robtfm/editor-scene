@@ -229,6 +229,12 @@ function fieldLabel(text: string, width: number): ReactEcs.JSX.Element {
   )
 }
 
+// Set while rendering a read-only (engine-managed) component's structured editor: widgets bake
+// this in at build time — Inputs get `disabled`, click handlers are dropped — so the same editor
+// renders, just non-interactive. Safe because a render pass is fully synchronous (set → build →
+// reset, no await in between).
+let fieldsDisabled = false
+
 // A bare numeric Input bound to a leaf path (free-text; parsed at Apply).
 function numberInput(
   key: ComponentKey,
@@ -253,9 +259,10 @@ function numberInput(
       uiBackground={{ color: VALUE_BG }}
       value={currentNumberText(key, path, value)}
       fontSize={FS - 1}
-      color={TEXT}
+      color={fieldsDisabled ? MUTED : TEXT}
       textAlign="middle-left"
       font="monospace"
+      disabled={fieldsDisabled}
       onChange={(v) => {
         setField(key, path, v)
       }}
@@ -347,8 +354,9 @@ function stringField(
         uiBackground={{ color: VALUE_BG }}
         value={currentString(key, path, value)}
         fontSize={FS - 1}
-        color={TEXT}
+        color={fieldsDisabled ? MUTED : TEXT}
         textAlign="middle-left"
+        disabled={fieldsDisabled}
         onChange={(v) => {
           setField(key, path, v)
         }}
@@ -385,9 +393,13 @@ function boolField(
         }}
         uiBackground={{ color: v ? TOGGLE_ON : TOGGLE_OFF }}
         uiText={{ value: v ? 'true' : 'false', fontSize: FS - 2, color: TEXT }}
-        onMouseDown={() => {
-          setField(key, path, !v)
-        }}
+        onMouseDown={
+          fieldsDisabled
+            ? undefined
+            : () => {
+                setField(key, path, !v)
+              }
+        }
       />
     </UiEntity>
   )
@@ -569,23 +581,28 @@ function rawEditor(
   name: string,
   value: unknown
 ): ReactEcs.JSX.Element {
-  const draft = getDraft(key, value)
-  const dirty = state.drafts.has(key) && draft !== valueJson(value)
+  // Pretty-print the default so the multi-line editor is readable; the draft (if edited) is
+  // whatever the user typed. Apply re-parses either way.
+  const pretty = JSON.stringify(value, null, 2)
+  const draft = state.drafts.get(key) ?? pretty
+  const dirty = state.drafts.has(key) && draft !== pretty
+  const lines = Math.min(Math.max(draft.split('\n').length, 1), 24)
   return (
     <Input
       key={`raw:${key}:${valueJson(value)}`}
       uiTransform={{
         elementId: `raw-${elementIdFor(key, '')}`,
         width: '100%',
-        height: 24,
+        height: lines * (FS + 6) + 10,
         padding: { left: 4, right: 4 }
       }}
       uiBackground={{ color: VALUE_BG }}
       value={draft}
       fontSize={FS - 1}
       color={dirty ? Color4.create(1, 0.95, 0.6, 1) : TEXT}
-      textAlign="middle-left"
+      textAlign="top-left"
       font="monospace"
+      multiLine
       onChange={(v) => {
         setDraft(key, v)
       }}
@@ -645,6 +662,9 @@ function enumRow(
   const cur = currentNumber(key, path, fallback)
   const idx = vals.findIndex(([, n]) => n === cur)
   const display = idx >= 0 ? vals[idx][0] : String(cur)
+  // Bake disabled-ness in at build time: the click handlers fire long after the render pass that
+  // sets/resets `fieldsDisabled`, so guarding inside `step` (which reads it at call time) wouldn't.
+  const disabled = fieldsDisabled
   const step = (dir: number): void => {
     if (vals.length === 0) return
     const next = vals[(idx + dir + vals.length) % vals.length]
@@ -659,20 +679,20 @@ function enumRow(
       <UiEntity
         uiTransform={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}
         uiBackground={{ color: REVERT_BG }}
-        uiText={{ value: '◀', fontSize: FS - 2, color: TEXT }}
-        onMouseDown={() => step(-1)}
+        uiText={{ value: '◀', fontSize: FS - 2, color: disabled ? MUTED : TEXT }}
+        onMouseDown={disabled ? undefined : () => step(-1)}
       />
       <UiEntity
         uiTransform={{ width: 200, height: 22, alignItems: 'center', justifyContent: 'center', margin: { left: 2, right: 2 } }}
         uiBackground={{ color: VALUE_BG }}
-        uiText={{ value: display, fontSize: FS - 2, color: TEXT }}
-        onMouseDown={() => step(1)}
+        uiText={{ value: display, fontSize: FS - 2, color: disabled ? MUTED : TEXT }}
+        onMouseDown={disabled ? undefined : () => step(1)}
       />
       <UiEntity
         uiTransform={{ width: 22, height: 22, alignItems: 'center', justifyContent: 'center' }}
         uiBackground={{ color: REVERT_BG }}
-        uiText={{ value: '▶', fontSize: FS - 2, color: TEXT }}
-        onMouseDown={() => step(1)}
+        uiText={{ value: '▶', fontSize: FS - 2, color: disabled ? MUTED : TEXT }}
+        onMouseDown={disabled ? undefined : () => step(1)}
       />
     </UiEntity>
   )
@@ -708,9 +728,13 @@ function bitmaskRow(
               uiTransform={{ width: 120, height: 22, margin: { right: 4, bottom: 2 }, alignItems: 'center', justifyContent: 'center' }}
               uiBackground={{ color: on ? TOGGLE_ON : TOGGLE_OFF }}
               uiText={{ value: nm, fontSize: FS - 3, color: TEXT }}
-              onMouseDown={() => {
-                setField(key, path, String(cur ^ bit))
-              }}
+              onMouseDown={
+                fieldsDisabled
+                  ? undefined
+                  : () => {
+                      setField(key, path, String(cur ^ bit))
+                    }
+              }
             />
           )
         })}
@@ -740,9 +764,10 @@ function rawFieldRow(
         uiBackground={{ color: VALUE_BG }}
         value={cur}
         fontSize={FS - 1}
-        color={TEXT}
+        color={fieldsDisabled ? MUTED : TEXT}
         textAlign="middle-left"
         font="monospace"
+        disabled={fieldsDisabled}
         onChange={(v) => {
           setField(key, path, v)
         }}
@@ -760,7 +785,7 @@ function withTransformCopy(
   widget: ReactEcs.JSX.Element
 ): ReactEcs.JSX.Element {
   const kind = transformDefaultKind(rawNode)
-  if (kind === null) return widget
+  if (kind === null || fieldsDisabled) return widget
   return (
     <UiEntity key={`${path}/wrap`} uiTransform={{ width: '100%', flexDirection: 'column' }}>
       {widget}
@@ -872,9 +897,13 @@ function renderSchemaNode(
               uiTransform={{ width: 96, height: 22, margin: { right: 4, bottom: 2 }, alignItems: 'center', justifyContent: 'center' }}
               uiBackground={{ color: c.name === active ? BUTTON_BG : REVERT_BG }}
               uiText={{ value: c.name, fontSize: FS - 3, color: TEXT }}
-              onMouseDown={() => {
-                setCase(key, path, c.name)
-              }}
+              onMouseDown={
+                fieldsDisabled
+                  ? undefined
+                  : () => {
+                      setCase(key, path, c.name)
+                    }
+              }
             />
           ))}
         </UiEntity>
@@ -917,13 +946,37 @@ function renderSchemaNode(
 }
 
 // Editor body for one component: toolbar (Apply / Revert / Raw-Fields / status)
-// plus either the structured editor or the raw-JSON input.
+// plus either the structured editor or the raw-JSON input. Read-only (engine-managed) components
+// get no toolbar and a disabled pretty-JSON view instead.
 function valueRow(
   entityId: string,
   name: string,
-  value: unknown
+  value: unknown,
+  readOnly: boolean
 ): ReactEcs.JSX.Element {
   const key = componentKey(entityId, name)
+
+  if (readOnly) {
+    // Same structured editor as a writable component, but no toolbar and every widget disabled
+    // (see `fieldsDisabled`). Falls back to the generic field renderer when no schema is available.
+    ensureSchema(name)
+    const schema = getSchema(name)
+    fieldsDisabled = true
+    const body =
+      schema !== undefined
+        ? renderSchemaNode(schema, key, schema.root, '', value)
+        : renderField(key, '', '', value)
+    fieldsDisabled = false
+    return (
+      <UiEntity
+        key={`${key}/editor`}
+        uiTransform={{ width: '100%', margin: { bottom: 6 }, padding: { left: 10 } }}
+      >
+        {body}
+      </UiEntity>
+    )
+  }
+
   const raw = state.rawMode.has(key)
   const status = state.editStatus.get(key) ?? ''
   // Pull the typed schema (lazily fetched); when present it drives the field editor.
@@ -993,52 +1046,137 @@ function valueRow(
   )
 }
 
+const COMPONENT_BORDER = Color4.create(0.32, 0.36, 0.46, 0.9)
+const COMPONENT_BG = Color4.create(0.11, 0.11, 0.15, 1)
+
+// Component grouping/colouring for the component window:
+//   core     — core-schema:: (name/tags/network/sync): user-managed scene metadata, top group
+//   asset    — asset-packs:: (smart-item behaviour): editable content
+//   normal   — writable protocol components
+//   readonly — engine-managed protocol components (no scene-write interface): view-only
+// inspector:: tooling state (and undecoded numeric ids) is hidden entirely — it's still kept in
+// the snapshot and round-tripped on save, just never surfaced here.
+type CompCategory = 'core' | 'asset' | 'normal' | 'readonly'
+
+const CORE_COLOR = Color4.create(0.5, 0.85, 0.62, 1) // green
+const ASSET_COLOR = Color4.create(0.95, 0.72, 0.42, 1) // amber
+const READONLY_COLOR = Color4.create(0.52, 0.54, 0.6, 1) // muted
+
+const CATEGORY_ORDER: Record<CompCategory, number> = {
+  core: 0,
+  asset: 1,
+  normal: 2,
+  readonly: 3
+}
+const CATEGORY_COLOR: Record<CompCategory, Color4> = {
+  core: CORE_COLOR,
+  asset: ASSET_COLOR,
+  normal: ACCENT,
+  readonly: READONLY_COLOR
+}
+
+function isHiddenComponent(name: string): boolean {
+  return name.startsWith('inspector::') || /^\d+$/.test(name)
+}
+
+function componentCategory(name: string): CompCategory {
+  if (name.startsWith('core-schema::')) return 'core'
+  if (name.startsWith('asset-packs::')) return 'asset'
+  // protocol: read-only unless the engine reports a scene-write interface for it.
+  if (!state.componentNames.includes(name)) return 'readonly'
+  return 'normal'
+}
+
+// Strip the "namespace::" prefix from custom components for display (core-schema::Name -> Name).
+function displayComponentName(name: string): string {
+  const i = name.indexOf('::')
+  return i >= 0 ? name.slice(i + 2) : name
+}
+
 function componentNodes(
   entityId: string,
   components: Record<string, unknown>
 ): ReactEcs.JSX.Element[] {
-  const rows: ReactEcs.JSX.Element[] = []
-  for (const name of Object.keys(components).sort()) {
+  const names = Object.keys(components)
+    .filter((n) => !isHiddenComponent(n))
+    .sort((a, b) => {
+      const order = CATEGORY_ORDER[componentCategory(a)] - CATEGORY_ORDER[componentCategory(b)]
+      return order !== 0 ? order : displayComponentName(a).localeCompare(displayComponentName(b))
+    })
+
+  const boxes: ReactEcs.JSX.Element[] = []
+  for (const name of names) {
     const key = componentKey(entityId, name)
     const expanded = state.expandedComponents.has(key)
-    rows.push(
+    const category = componentCategory(name)
+    const readOnly = category === 'readonly'
+
+    const header = (
       <UiEntity
-        key={key}
-        uiTransform={{
-          width: '100%',
-          height: ROW_H,
-          margin: { bottom: 1 },
-          flexDirection: 'row',
-          alignItems: 'center'
-        }}
+        uiTransform={{ width: '100%', height: ROW_H, flexDirection: 'row', alignItems: 'center' }}
       >
-        <UiEntity
-          uiTransform={{ flexGrow: 1, height: ROW_H, padding: { left: 4 }, alignItems: 'center' }}
-          uiText={{
-            value: `${chevron(expanded)} ${name}`,
-            fontSize: FS,
-            color: ACCENT,
-            textAlign: 'middle-left'
-          }}
-          onMouseDown={() => {
-            toggleComponent(key)
-          }}
-        />
-        <UiEntity
-          uiTransform={{ width: 30, height: 20, alignItems: 'center', justifyContent: 'center' }}
-          uiBackground={{ color: DANGER }}
-          uiText={{ value: 'Del', fontSize: FS - 3, color: TEXT }}
-          onMouseDown={() => {
-            deleteComponent(entityId, name)
-          }}
-        />
+        {/* flexGrow wrapper + an inner definite-width text element, so textAlign actually
+            left-aligns (a bare flexGrow uiText centers in DCL). */}
+        <UiEntity uiTransform={{ flexGrow: 1, height: ROW_H, padding: { left: 4 } }}>
+          <UiEntity
+            uiTransform={{ width: '100%', height: ROW_H }}
+            uiText={{
+              value: `${chevron(expanded)} ${displayComponentName(name)}`,
+              fontSize: FS,
+              color: CATEGORY_COLOR[category],
+              textAlign: 'middle-left'
+            }}
+            onMouseDown={() => {
+              toggleComponent(key)
+            }}
+          />
+        </UiEntity>
+        {/* engine-managed components can't be removed, so no Del button */}
+        {readOnly ? (
+          []
+        ) : (
+          <UiEntity
+            uiTransform={{
+              width: 30,
+              height: 20,
+              margin: { right: 4 },
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            uiBackground={{ color: DANGER }}
+            uiText={{ value: 'Del', fontSize: FS - 3, color: TEXT }}
+            onMouseDown={() => {
+              deleteComponent(entityId, name)
+            }}
+          />
+        )}
       </UiEntity>
     )
-    if (expanded) {
-      rows.push(valueRow(entityId, name, components[name]))
-    }
+
+    // Each component is a bordered card (outer = border colour, inner 1px margin = border width)
+    // so it's clear where one component starts and the next begins.
+    boxes.push(
+      <UiEntity
+        key={`box-${key}`}
+        uiTransform={{ width: '100%', flexDirection: 'column', margin: { bottom: 4 } }}
+        uiBackground={{ color: COMPONENT_BORDER }}
+      >
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            flexDirection: 'column',
+            margin: 1,
+            padding: { top: 2, bottom: 2 }
+          }}
+          uiBackground={{ color: COMPONENT_BG }}
+        >
+          {header}
+          {expanded ? valueRow(entityId, name, components[name], readOnly) : []}
+        </UiEntity>
+      </UiEntity>
+    )
   }
-  return rows
+  return boxes
 }
 
 const ROW_ACTIVE = Color4.create(0.5, 0.4, 0.2, 0.85)
@@ -1101,17 +1239,20 @@ function entityNode(
             if (childCount > 0) toggleEntity(entityId)
           }}
         />
-        <UiEntity
-          uiTransform={{ flexGrow: 1, height: ROW_H }}
-          uiText={{ value: label, fontSize: FS, color: TEXT, textAlign: 'middle-left' }}
-          onMouseDown={() => {
-            selectionClick(
-              entityId,
-              inputSystem.isPressed(InputAction.IA_MODIFIER),
-              inputSystem.isPressed(InputAction.IA_WALK)
-            )
-          }}
-        />
+        <UiEntity uiTransform={{ flexGrow: 1, height: ROW_H }}>
+          {/* inner definite-width text so textAlign left-aligns (bare flexGrow uiText centers). */}
+          <UiEntity
+            uiTransform={{ width: '100%', height: ROW_H }}
+            uiText={{ value: label, fontSize: FS, color: TEXT, textAlign: 'middle-left' }}
+            onMouseDown={() => {
+              selectionClick(
+                entityId,
+                inputSystem.isPressed(InputAction.IA_MODIFIER),
+                inputSystem.isPressed(InputAction.IA_WALK)
+              )
+            }}
+          />
+        </UiEntity>
         {componentsBadge(entityId, compCount)}
         {Number(entityId) >= 512 ? deleteButton(entityId) : []}
       </UiEntity>
@@ -1901,7 +2042,8 @@ function saveDialogUi(): ReactEcs.JSX.Element | null {
             width: '100%',
             height: 420,
             flexDirection: 'column',
-            overflow: 'scroll'
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
           }}
         >
           {[...byEntity.entries()].map(([eid, eRows]) => saveDiffEntity(eid, eRows, selection))}
@@ -1985,7 +2127,8 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
             width: '100%',
             height: 200,
             flexDirection: 'column',
-            overflow: 'scroll'
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
           }}
         >
           {matches.length > 0
@@ -2042,7 +2185,7 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
   return (
     <UiEntity
       uiTransform={{
-        width: 460,
+        width: 500,
         height: '92%',
         positionType: 'absolute',
         position: { top: '4%', left: 12 },
@@ -2118,7 +2261,8 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
           height: '100%',
           flexDirection: 'column',
           padding: 6,
-          overflow: 'scroll'
+          overflow: 'scroll',
+          scrollVisible: 'both'
         }}
       >
         {count > 0
@@ -2163,7 +2307,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {controlPanel()}
       <UiEntity
         uiTransform={{
-          width: 480,
+          width: 500,
           height: '92%',
           positionType: 'absolute',
           position: { top: '4%', right: 12 },
@@ -2268,6 +2412,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           flexDirection: 'column',
           padding: 6,
           overflow: 'scroll',
+          scrollVisible: 'both',
           scrollPosition: jump
         }}
       >
