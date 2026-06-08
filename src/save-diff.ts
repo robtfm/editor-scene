@@ -28,6 +28,10 @@ const cell = (v: unknown): Cell => (v === undefined ? ABSENT : { present: true, 
 
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
+  // Numbers compare modulo float32 rounding: the editor writes float64, but the engine stores
+  // component floats (Transform position/rotation/scale, colours, …) as f32 and re-emits the
+  // rounded value — so a just-saved value reloads ~1 ULP off its source. Real edits exceed f32 ULP.
+  if (typeof a === 'number' && typeof b === 'number') return Math.fround(a) === Math.fround(b)
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false

@@ -114,6 +114,11 @@ export const state = {
   saveDialog: null as
     | { rows: DiffRow[]; selection: Map<string, DiffSource>; initial: Snapshot }
     | null,
+  // After a save, the authored set we just persisted (decoded/snapshot form), cached as the new
+  // baseline so the next save diffs against what we last wrote rather than the original /crdt_initial
+  // — otherwise prior saves' edits (live ≠ stale-initial, but no longer in the cleared changelog)
+  // would default to revert. Null until the first save; reset when the editor session reloads.
+  savedBaseline: null as Snapshot | null,
   // transient status line for the save action.
   saveStatus: ''
 }

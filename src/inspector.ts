@@ -335,9 +335,16 @@ export async function saveComposite(): Promise<void> {
   try {
     // isSavableComponent gates protocol components on the writable set; make sure it's loaded.
     if (state.componentNames.length === 0) await loadComponentNames()
-    const initialReply = await BevyApi.consoleCommand('crdt_initial')
-    const initial = JSON.parse(initialReply) as Snapshot
-    decodeCustomComponents(initial)
+    // Diff against the last-saved authored set if we have one (so prior saves stick); otherwise the
+    // engine's original /crdt_initial baseline. See state.savedBaseline.
+    let initial: Snapshot
+    if (state.savedBaseline !== null) {
+      initial = state.savedBaseline
+    } else {
+      const initialReply = await BevyApi.consoleCommand('crdt_initial')
+      initial = JSON.parse(initialReply) as Snapshot
+      decodeCustomComponents(initial)
+    }
     const rows = computeSaveDiff(initial, state.snapshot)
     if (rows.length === 0) {
       await writeComposite(initial, [], new Map())
@@ -377,6 +384,9 @@ async function writeComposite(
   state.saveStatus = 'saving…'
   try {
     const authored = buildAuthoredFromSelection(initial, rows, selection)
+    // Cache the persisted authored set (snapshot form, before the SDK conversion below mutates it)
+    // as the next baseline, so a follow-up save diffs against what we just wrote.
+    const newBaseline = JSON.parse(JSON.stringify(authored)) as Snapshot
 
     // Protocol components are in engine form (a protobuf oneof as `{case: val}` with no `$case`),
     // which the composite loader drops. Convert them to SDK form via each component's schema;
@@ -399,6 +409,7 @@ async function writeComposite(
     const composite = buildComposite(authored)
     const skipped = unknownComponentNames(authored)
     const path = await BevyApi.consoleCommand('save_composite', [stringToBase64(composite)])
+    state.savedBaseline = newBaseline
     resetSaveChangelog()
     state.saveDialog = null
     state.saveStatus =
