@@ -156,6 +156,39 @@ export function customTimestamp(entityId: string, name: string): number {
   return timestamps.get(`${entityId}/${name}`) ?? 0
 }
 
+// UTF-8 encode a string (no TextEncoder in the scene runtime).
+function utf8Bytes(s: string): Uint8Array {
+  const out: number[] = []
+  for (let i = 0; i < s.length; i++) {
+    let c = s.charCodeAt(i)
+    if (c < 0x80) {
+      out.push(c)
+    } else if (c < 0x800) {
+      out.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f))
+    } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const c2 = s.charCodeAt(++i)
+      c = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff)
+      out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 0x3f), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f))
+    } else {
+      out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f))
+    }
+  }
+  return new Uint8Array(out)
+}
+
+// Standard base64 of a string's UTF-8 bytes — used to ship the composite to /save_composite.
+export function stringToBase64(s: string): string {
+  return bytesToBase64(utf8Bytes(s))
+}
+
+// componentName + jsonSchema for every known custom component, for the composite builder.
+export function customComponentDefs(): Array<{ componentName: string; jsonSchema: unknown }> {
+  return CUSTOM_DEFS.map((d) => ({
+    componentName: d.componentName,
+    jsonSchema: (d.schema as { jsonSchema?: unknown }).jsonSchema
+  }))
+}
+
 // Encode an edited custom component value to base64 via its SDK schema, for /set_component_raw.
 // Returns undefined if the component isn't a known custom one. Throws if the value doesn't match
 // the schema (e.g. a missing required field).

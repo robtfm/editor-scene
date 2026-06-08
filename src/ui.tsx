@@ -41,7 +41,8 @@ import {
   selectionHasParented,
   childIdsOf,
   addComponent,
-  deleteComponent
+  deleteComponent,
+  saveComposite
 } from './inspector'
 import {
   isColor,
@@ -2011,10 +2012,24 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           <UiEntity
             uiTransform={{ width: 320, height: 20, alignItems: 'center' }}
             uiText={{
-              value: statusText(),
+              value: state.saveStatus !== '' ? state.saveStatus : statusText(),
               fontSize: FS - 2,
               color: MUTED,
               textAlign: 'middle-left'
+            }}
+          />
+          <UiEntity
+            uiTransform={{
+              width: 80,
+              height: 22,
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: { right: 4 }
+            }}
+            uiBackground={{ color: BUTTON_BG }}
+            uiText={{ value: 'Save', fontSize: FS - 1, color: TEXT }}
+            onMouseDown={() => {
+              saveComposite().catch(console.error)
             }}
           />
           <UiEntity

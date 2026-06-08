@@ -135,6 +135,64 @@ export function captureTransformDefaults(key: ComponentKey): void {
   walk(schema.root, '')
 }
 
+// Fetch a component's schema and cache it, awaitably (best-effort — leaves it unset on failure,
+// in which case the value passes through unchanged). Used by the save path, which must have the
+// schema in hand before converting engine-form values.
+export async function loadSchema(name: string): Promise<void> {
+  if (state.schemas.has(name)) return
+  try {
+    const reply = await BevyApi.consoleCommand('component_schema', [name])
+    state.schemas.set(name, JSON.parse(reply))
+  } catch {
+    /* leave unset */
+  }
+}
+
+// Convert an engine-form component value into the SDK form the composite loader expects. The
+// engine's snapshot JSON encodes a protobuf `oneof` as `{ caseName: value }` (no discriminator),
+// but the SDK/composite needs `{ $case: caseName, caseName: value }` — without it, the instancer
+// drops the oneof on load. Walks the value against the schema; only oneof nodes are rewritten,
+// everything else (messages, repeated, leaves, incl. harmless null/default fields) passes through.
+export function toSdkValue(value: unknown, node: SchemaNode): unknown {
+  if (value === null || value === undefined) return value
+  switch (node.kind) {
+    case 'oneof': {
+      if (typeof value !== 'object' || Array.isArray(value)) return value
+      const obj = value as Record<string, unknown>
+      // already SDK form (e.g. a custom component, or re-run) — recurse the active case
+      if (typeof obj.$case === 'string') {
+        const active = node.cases.find((c) => c.name === obj.$case)
+        return active === undefined
+          ? value
+          : { $case: obj.$case, [obj.$case]: toSdkValue(obj[obj.$case], active.field) }
+      }
+      for (const c of node.cases) {
+        const cv = obj[c.name]
+        if (cv !== null && cv !== undefined) {
+          return { $case: c.name, [c.name]: toSdkValue(cv, c.field) }
+        }
+      }
+      return null // unset oneof
+    }
+    case 'message': {
+      if (typeof value !== 'object' || Array.isArray(value)) return value
+      const obj = value as Record<string, unknown>
+      const out: Record<string, unknown> = { ...obj }
+      for (const f of node.fields) {
+        const k = f.name as string
+        out[k] = toSdkValue(obj[k], f)
+      }
+      return out
+    }
+    case 'repeated': {
+      if (!Array.isArray(value)) return value
+      return value.map((v) => toSdkValue(v, node.element))
+    }
+    default:
+      return value
+  }
+}
+
 // Fetch (once) the schema for a component, caching it. Best-effort.
 export function ensureSchema(name: string): void {
   if (state.schemas.has(name) || state.schemaPending.has(name)) return

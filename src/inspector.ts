@@ -8,6 +8,10 @@ import {
   primeScroll,
   parentOf,
   topLevelSelected,
+  markEdited,
+  markComponentDeleted,
+  markEntityDeleted,
+  resetSaveChangelog,
   type ComponentKey,
   type Snapshot
 } from './state'
@@ -17,9 +21,11 @@ import {
   isCustomComponent,
   customComponentId,
   customTimestamp,
-  encodeCustomComponent
+  encodeCustomComponent,
+  stringToBase64
 } from './custom-components'
-import { getSchema, captureTransformDefaults } from './schema'
+import { buildComposite, unknownComponentNames } from './composite'
+import { getSchema, captureTransformDefaults, loadSchema, toSdkValue } from './schema'
 import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
@@ -166,6 +172,7 @@ export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
 // wins LWW. Everything else goes through /set_component as JSON.
 async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
   applyLocalComponent(entityId, name, json)
+  markEdited(entityId, name)
   if (isCustomComponent(name)) {
     const id = customComponentId(name)
     const b64 = encodeCustomComponent(name, JSON.parse(json))
@@ -183,6 +190,7 @@ async function writeComponent(entityId: string, name: string, json: string): Pro
 function removeLocal(id: string, recursive: boolean): void {
   if (!recursive) {
     delete state.snapshot[id]
+    markEntityDeleted(id)
     return
   }
   const all: string[] = []
@@ -192,7 +200,10 @@ function removeLocal(id: string, recursive: boolean): void {
     all.push(cur)
     for (const child of directChildren(cur)) stack.push(child)
   }
-  for (const r of all) delete state.snapshot[r]
+  for (const r of all) {
+    delete state.snapshot[r]
+    markEntityDeleted(r)
+  }
   // Close the component window if its entity was removed.
   if (state.componentWindow !== null && !(state.componentWindow in state.snapshot)) {
     state.componentWindow = null
@@ -267,6 +278,7 @@ export function deleteComponent(entityId: string, name: string): void {
   const key = componentKey(entityId, name)
   state.expandedComponents.delete(key)
   clearComponentEdits(key)
+  markComponentDeleted(entityId, name)
   BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) => {
     console.error('delete_component failed:', name, e)
   })
@@ -296,6 +308,83 @@ export async function setComponentValue(
     await reloadAfter()
   } catch (e) {
     state.editStatus.set(key, String(e))
+  }
+}
+
+// --- save ---
+
+// Persist the authored scene as a flat main.composite: start from the loaded baseline
+// (/crdt_initial), override each component the editor changed this session with its live value
+// (so runtime churn isn't persisted), drop editor-deleted entities/components, build the
+// composite, and ship it to /save_composite. A returned path is cached to skip the dialog next
+// time; on success the changelog resets (the saved state becomes the new baseline).
+export async function saveComposite(): Promise<void> {
+  state.saveStatus = 'saving…'
+  try {
+    const initialReply = await BevyApi.consoleCommand('crdt_initial')
+    const initial = JSON.parse(initialReply) as Snapshot
+    decodeCustomComponents(initial)
+    const live = state.snapshot
+
+    const authored: Record<string, Record<string, unknown>> = {}
+    const ensure = (eid: string): Record<string, unknown> => {
+      if (authored[eid] === undefined) authored[eid] = {}
+      return authored[eid]
+    }
+    const split = (key: string): [string, string] => {
+      const i = key.indexOf('/')
+      return [key.slice(0, i), key.slice(i + 1)]
+    }
+
+    // baseline (authored source), minus editor-deleted entities
+    for (const [eid, comps] of Object.entries(initial)) {
+      if (state.deletedEntities.has(eid)) continue
+      for (const [name, value] of Object.entries(comps)) ensure(eid)[name] = value
+    }
+    // editor edits override the baseline with the live value (and add new components)
+    for (const key of state.editedComponents) {
+      const [eid, name] = split(key)
+      if (state.deletedEntities.has(eid)) continue
+      const v = live[eid]?.[name]
+      if (v !== undefined) ensure(eid)[name] = v
+    }
+    // editor-removed components
+    for (const key of state.deletedComponents) {
+      const [eid, name] = split(key)
+      if (authored[eid] !== undefined) delete authored[eid][name]
+    }
+
+    // Protocol components arrive in engine form (a protobuf oneof as `{case: val}` with no
+    // `$case`), which the composite instancer drops on load. Convert them to SDK form using each
+    // component's schema. Custom components are already SDK form (decoded via the SDK schema).
+    const protoNames = new Set<string>()
+    for (const comps of Object.values(authored)) {
+      for (const name of Object.keys(comps)) {
+        if (!isCustomComponent(name)) protoNames.add(name)
+      }
+    }
+    await Promise.all([...protoNames].map(loadSchema))
+    for (const comps of Object.values(authored)) {
+      for (const name of Object.keys(comps)) {
+        if (isCustomComponent(name)) continue
+        const schema = getSchema(name)
+        if (schema !== undefined) comps[name] = toSdkValue(comps[name], schema.root)
+      }
+    }
+
+    const composite = buildComposite(authored)
+    const skipped = unknownComponentNames(authored)
+    const args =
+      state.savePath !== undefined
+        ? [stringToBase64(composite), state.savePath]
+        : [stringToBase64(composite)]
+    const path = await BevyApi.consoleCommand('save_composite', args)
+    state.savePath = path
+    resetSaveChangelog()
+    state.saveStatus =
+      skipped.length > 0 ? `saved → ${path} (skipped: ${skipped.join(', ')})` : `saved → ${path}`
+  } catch (e) {
+    state.saveStatus = `save failed: ${String(e)}`
   }
 }
 

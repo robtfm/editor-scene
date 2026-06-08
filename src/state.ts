@@ -95,7 +95,42 @@ export const state = {
   // 'yz', rotate 'rx'|'ry'|'rz', or null
   gizmoHover: null as string | null,
   // true while a gizmo handle is being dragged
-  gizmoDragging: false
+  gizmoDragging: false,
+
+  // --- save changelog: what the editor changed this session, so a save persists our edits
+  // (not the scene's runtime churn). Keys are `${entityId}/${componentName}`. ---
+  // components the editor wrote — these take their live value in the saved composite.
+  editedComponents: new Set<string>(),
+  // components the editor removed — omitted from the saved composite.
+  deletedComponents: new Set<string>(),
+  // entity ids the editor deleted — omitted (with all their components) from the composite.
+  deletedEntities: new Set<string>(),
+  // path of the last successful save; reused to skip the dialog on subsequent saves.
+  savePath: undefined as string | undefined,
+  // transient status line for the save action.
+  saveStatus: ''
+}
+
+// Record an editor edit/removal in the changelog (so save knows it was us, not runtime churn).
+export function markEdited(entityId: string, name: string): void {
+  state.editedComponents.add(`${entityId}/${name}`)
+  state.deletedComponents.delete(`${entityId}/${name}`)
+}
+
+export function markComponentDeleted(entityId: string, name: string): void {
+  state.deletedComponents.add(`${entityId}/${name}`)
+  state.editedComponents.delete(`${entityId}/${name}`)
+}
+
+export function markEntityDeleted(entityId: string): void {
+  state.deletedEntities.add(entityId)
+}
+
+// Clear the changelog after a successful save — the just-saved state becomes the new baseline.
+export function resetSaveChangelog(): void {
+  state.editedComponents.clear()
+  state.deletedComponents.clear()
+  state.deletedEntities.clear()
 }
 
 // The engine creates the scrollable link with scroll_position = None and only
