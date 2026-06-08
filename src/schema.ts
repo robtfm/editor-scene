@@ -177,10 +177,14 @@ export function toSdkValue(value: unknown, node: SchemaNode): unknown {
     case 'message': {
       if (typeof value !== 'object' || Array.isArray(value)) return value
       const obj = value as Record<string, unknown>
-      const out: Record<string, unknown> = { ...obj }
+      const out: Record<string, unknown> = {}
       for (const f of node.fields) {
         const k = f.name as string
-        out[k] = toSdkValue(obj[k], f)
+        const v = toSdkValue(obj[k], f)
+        // Drop unset (null) fields. The engine emits unset optionals as null, but the SDK
+        // composite loader (build-time) expects them absent — e.g. it reads `.x` on a null
+        // Vector and crashes. Absent fields fall back to defaults, matching the Hub's output.
+        if (v !== null && v !== undefined) out[k] = v
       }
       return out
     }
