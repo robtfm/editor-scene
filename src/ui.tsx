@@ -74,7 +74,7 @@ import {
   type ComponentSchema,
   type SchemaNode
 } from './schema'
-import { entityName } from './custom-components'
+import { entityName, isCustomComponent, customComponentNames } from './custom-components'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
 const HEADER_BG = Color4.create(0.14, 0.14, 0.18, 1)
@@ -2076,8 +2076,17 @@ function saveDialogUi(): ReactEcs.JSX.Element | null {
 function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
   const existing = new Set(Object.keys(state.snapshot[entityId] ?? {}))
   const filter = state.addComponentFilter.toLowerCase()
-  const matches = state.componentNames
-    .filter((n) => !existing.has(n) && n.toLowerCase().includes(filter))
+  // Writable protocol components plus the addable custom ones (core-schema/asset-packs); the
+  // filter matches either the full or namespace-stripped name. Grouped like the component window:
+  // core-schema first, then asset-packs, then protocol.
+  const matchesFilter = (n: string): boolean =>
+    n.toLowerCase().includes(filter) || displayComponentName(n).toLowerCase().includes(filter)
+  const matches = [...state.componentNames, ...customComponentNames()]
+    .filter((n) => !existing.has(n) && matchesFilter(n))
+    .sort((a, b) => {
+      const order = CATEGORY_ORDER[componentCategory(a)] - CATEGORY_ORDER[componentCategory(b)]
+      return order !== 0 ? order : displayComponentName(a).localeCompare(displayComponentName(b))
+    })
     .slice(0, 100)
   const haveCatalog = state.componentNames.length > 0
 
@@ -2134,10 +2143,12 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
         >
           {matches.length > 0
             ? matches.map((name) => {
-                // Load the schema (idempotent) so its placement/requires are known, then grey out
-                // and disable any candidate whose hard restrictions aren't met on this entity.
-                ensureSchema(name)
+                // Protocol candidates: load the schema (idempotent) so placement/requires are known,
+                // then grey out / disable any whose hard restrictions aren't met on this entity.
+                // Custom components have no engine schema (and no restrictions) — always selectable.
+                if (!isCustomComponent(name)) ensureSchema(name)
                 const blocked = restrictionUnmet(name, entityId)
+                const display = displayComponentName(name)
                 return (
                   <UiEntity
                     key={`add-${name}`}
@@ -2150,9 +2161,9 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
                     }}
                     uiBackground={{ color: ENTITY_BG }}
                     uiText={{
-                      value: blocked === null ? name : `${name}  ·  ${blocked}`,
+                      value: blocked === null ? display : `${display}  ·  ${blocked}`,
                       fontSize: FS - 1,
-                      color: blocked === null ? TEXT : MUTED,
+                      color: blocked === null ? CATEGORY_COLOR[componentCategory(name)] : MUTED,
                       textAlign: 'middle-left'
                     }}
                     onMouseDown={

@@ -17,6 +17,7 @@ type CustomDef = {
   schema: {
     deserialize: (reader: ReadWriteByteBuffer) => unknown
     serialize: (value: unknown, builder: ReadWriteByteBuffer) => void
+    create: () => unknown
   }
 }
 
@@ -149,6 +150,22 @@ export function isCustomComponent(name: string): boolean {
 
 export function customComponentId(name: string): number | undefined {
   return BY_NAME.get(name)?.componentId
+}
+
+// Custom component names that can be added to an entity — the user-managed namespaces
+// (core-schema::, asset-packs::), excluding the inspector:: tooling state the editor keeps but
+// never surfaces.
+export function customComponentNames(): string[] {
+  return [...BY_NAME.keys()].filter((n) => !n.startsWith('inspector::'))
+}
+
+// A fresh default value for a custom component, built locally from its SDK schema (the engine's
+// /component_default can't address custom components). Normalised to plain JSON so unset Optional
+// fields (which `create()` leaves undefined) drop out, matching the decoded snapshot shape.
+export function createCustomDefault(name: string): unknown | undefined {
+  const def = BY_NAME.get(name)
+  if (def === undefined) return undefined
+  return JSON.parse(JSON.stringify(def.schema.create() ?? {}))
 }
 
 // The LWW timestamp the editor last saw for this custom component (0 if unseen).

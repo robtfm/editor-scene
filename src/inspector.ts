@@ -22,6 +22,7 @@ import {
   customComponentId,
   customTimestamp,
   encodeCustomComponent,
+  createCustomDefault,
   stringToBase64
 } from './custom-components'
 import { buildComposite, unknownComponentNames } from './composite'
@@ -248,13 +249,19 @@ export async function addComponent(entityId: string, name: string): Promise<void
   const key = componentKey(entityId, name)
   state.expandedComponents.add(key)
 
+  // Custom components aren't known to the engine — seed their default from the SDK schema locally.
+  // Protocol components fetch the engine's full default shape (falls back to `{}` on failure).
   let json = '{}'
-  try {
-    const reply = await BevyApi.consoleCommand('component_default', [name])
-    JSON.parse(reply) // validate before adopting it
-    json = reply
-  } catch (e) {
-    console.error('component_default failed (using {}):', name, e)
+  if (isCustomComponent(name)) {
+    json = JSON.stringify(createCustomDefault(name) ?? {})
+  } else {
+    try {
+      const reply = await BevyApi.consoleCommand('component_default', [name])
+      JSON.parse(reply) // validate before adopting it
+      json = reply
+    } catch (e) {
+      console.error('component_default failed (using {}):', name, e)
+    }
   }
 
   try {
