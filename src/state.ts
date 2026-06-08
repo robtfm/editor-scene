@@ -105,8 +105,6 @@ export const state = {
   deletedComponents: new Set<string>(),
   // entity ids the editor deleted — omitted (with all their components) from the composite.
   deletedEntities: new Set<string>(),
-  // path of the last successful save; reused to skip the dialog on subsequent saves.
-  savePath: undefined as string | undefined,
   // transient status line for the save action.
   saveStatus: ''
 }

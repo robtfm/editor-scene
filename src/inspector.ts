@@ -374,12 +374,9 @@ export async function saveComposite(): Promise<void> {
 
     const composite = buildComposite(authored)
     const skipped = unknownComponentNames(authored)
-    const args =
-      state.savePath !== undefined
-        ? [stringToBase64(composite), state.savePath]
-        : [stringToBase64(composite)]
-    const path = await BevyApi.consoleCommand('save_composite', args)
-    state.savePath = path
+    // The engine derives the destination from the active scene (local path, else a dialog/picker)
+    // and remembers it, so we just hand over the bytes.
+    const path = await BevyApi.consoleCommand('save_composite', [stringToBase64(composite)])
     resetSaveChangelog()
     state.saveStatus =
       skipped.length > 0 ? `saved → ${path} (skipped: ${skipped.join(', ')})` : `saved → ${path}`
