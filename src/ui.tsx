@@ -63,6 +63,7 @@ import {
 import {
   ensureSchema,
   getSchema,
+  restrictionUnmet,
   buildFromSchema,
   effectiveDefault,
   transformDefaultKind,
@@ -2132,25 +2133,40 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
           }}
         >
           {matches.length > 0
-            ? matches.map((name) => (
-                <UiEntity
-                  key={`add-${name}`}
-                  uiTransform={{
-                    width: '100%',
-                    height: ROW_H,
-                    margin: { bottom: 1 },
-                    padding: { left: 6 },
-                    alignItems: 'center'
-                  }}
-                  uiBackground={{ color: ENTITY_BG }}
-                  uiText={{ value: name, fontSize: FS - 1, color: TEXT, textAlign: 'middle-left' }}
-                  onMouseDown={() => {
-                    addComponent(entityId, name).catch(console.error)
-                    state.addComponentOpen = false
-                    state.addComponentFilter = ''
-                  }}
-                />
-              ))
+            ? matches.map((name) => {
+                // Load the schema (idempotent) so its placement/requires are known, then grey out
+                // and disable any candidate whose hard restrictions aren't met on this entity.
+                ensureSchema(name)
+                const blocked = restrictionUnmet(name, entityId)
+                return (
+                  <UiEntity
+                    key={`add-${name}`}
+                    uiTransform={{
+                      width: '100%',
+                      height: ROW_H,
+                      margin: { bottom: 1 },
+                      padding: { left: 6 },
+                      alignItems: 'center'
+                    }}
+                    uiBackground={{ color: ENTITY_BG }}
+                    uiText={{
+                      value: blocked === null ? name : `${name}  ·  ${blocked}`,
+                      fontSize: FS - 1,
+                      color: blocked === null ? TEXT : MUTED,
+                      textAlign: 'middle-left'
+                    }}
+                    onMouseDown={
+                      blocked === null
+                        ? () => {
+                            addComponent(entityId, name).catch(console.error)
+                            state.addComponentOpen = false
+                            state.addComponentFilter = ''
+                          }
+                        : undefined
+                    }
+                  />
+                )
+              })
             : [
                 <UiEntity
                   key="add-none"

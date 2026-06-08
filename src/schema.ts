@@ -215,6 +215,55 @@ export function ensureSchema(name: string): void {
     })
 }
 
+// The entity's parent id (Transform.parent, defaulting to the scene root 0), or null at/above the
+// root. Guards self-parent so a malformed snapshot can't loop the ancestor walk.
+function parentOf(entityId: string): string | null {
+  if (entityId === '0') return null
+  const t = state.snapshot[entityId]?.Transform as { parent?: number } | undefined
+  const p = String(t?.parent ?? 0)
+  return p === entityId ? null : p
+}
+
+function hasComponentAt(entityId: string, component: string, locality: string): boolean {
+  const has = (eid: string): boolean => component in (state.snapshot[eid] ?? {})
+  switch (locality) {
+    case 'same':
+      return has(entityId)
+    case 'parent': {
+      const p = parentOf(entityId)
+      return p !== null && has(p)
+    }
+    case 'ancestor': {
+      const seen = new Set<string>([entityId])
+      for (let p = parentOf(entityId); p !== null && !seen.has(p); p = parentOf(p)) {
+        if (has(p)) return true
+        seen.add(p)
+      }
+      return false
+    }
+    default:
+      return true // unknown locality — don't block
+  }
+}
+
+// A component's unmet *hard* restriction for a target entity, as a short reason, or null if it can
+// be added. Checks placement (root-only) and hard requires (a component must be present at the
+// given locality); soft requires are recommendations and never block. Returns null when the schema
+// isn't loaded yet — restrictions can only be enforced once known (callers should ensureSchema).
+export function restrictionUnmet(name: string, entityId: string): string | null {
+  const schema = getSchema(name)
+  if (schema === undefined) return null
+
+  if (schema.placement === 'root' && entityId !== '0') return 'scene root only'
+
+  for (const req of schema.requires) {
+    if (req.hard && !hasComponentAt(entityId, req.component, req.locality)) {
+      return `needs ${req.component}`
+    }
+  }
+  return null
+}
+
 // --- value access by dotted path (oneof cases nest under the oneof field name) ---
 
 export function valueAt(root: unknown, path: string): unknown {
