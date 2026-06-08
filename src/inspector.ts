@@ -25,6 +25,13 @@ import {
   stringToBase64
 } from './custom-components'
 import { buildComposite, unknownComponentNames } from './composite'
+import {
+  computeSaveDiff,
+  buildAuthoredFromSelection,
+  defaultSelection,
+  type DiffRow,
+  type DiffSource
+} from './save-diff'
 import { getSchema, captureTransformDefaults, loadSchema, toSdkValue } from './schema'
 import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
@@ -172,7 +179,7 @@ export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
 // wins LWW. Everything else goes through /set_component as JSON.
 async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
   applyLocalComponent(entityId, name, json)
-  markEdited(entityId, name)
+  markEdited(entityId, name, JSON.parse(json))
   if (isCustomComponent(name)) {
     const id = customComponentId(name)
     const b64 = encodeCustomComponent(name, JSON.parse(json))
@@ -313,50 +320,60 @@ export async function setComponentValue(
 
 // --- save ---
 
-// Persist the authored scene as a flat main.composite: start from the loaded baseline
-// (/crdt_initial), override each component the editor changed this session with its live value
-// (so runtime churn isn't persisted), drop editor-deleted entities/components, build the
-// composite, and ship it to /save_composite. A returned path is cached to skip the dialog next
-// time; on success the changelog resets (the saved state becomes the new baseline).
+// Save: diff the three sources (initial / editor / live) over the authored scope and, if anything
+// differs, open the diff dialog for the user to choose per component. With no differences, write
+// the baseline straight away.
 export async function saveComposite(): Promise<void> {
-  state.saveStatus = 'saving…'
+  state.saveStatus = 'preparing…'
   try {
+    // isSavableComponent gates protocol components on the writable set; make sure it's loaded.
+    if (state.componentNames.length === 0) await loadComponentNames()
     const initialReply = await BevyApi.consoleCommand('crdt_initial')
     const initial = JSON.parse(initialReply) as Snapshot
     decodeCustomComponents(initial)
-    const live = state.snapshot
+    const rows = computeSaveDiff(initial, state.snapshot)
+    if (rows.length === 0) {
+      await writeComposite(initial, [], new Map())
+      return
+    }
+    const selection = new Map<string, DiffSource>()
+    for (const row of rows) {
+      selection.set(`${row.entityId}/${row.component}`, defaultSelection(row))
+    }
+    state.saveDialog = { rows, selection, initial }
+    state.saveStatus = `${rows.length} change${rows.length === 1 ? '' : 's'} — review & save`
+  } catch (e) {
+    state.saveStatus = `save failed: ${String(e)}`
+  }
+}
 
-    const authored: Record<string, Record<string, unknown>> = {}
-    const ensure = (eid: string): Record<string, unknown> => {
-      if (authored[eid] === undefined) authored[eid] = {}
-      return authored[eid]
-    }
-    const split = (key: string): [string, string] => {
-      const i = key.indexOf('/')
-      return [key.slice(0, i), key.slice(i + 1)]
-    }
+// Confirm the diff dialog: write the composite using the chosen sources.
+export async function confirmSaveDialog(): Promise<void> {
+  const dialog = state.saveDialog
+  if (dialog === null) return
+  await writeComposite(dialog.initial, dialog.rows, dialog.selection)
+}
 
-    // baseline (authored source), minus editor-deleted entities
-    for (const [eid, comps] of Object.entries(initial)) {
-      if (state.deletedEntities.has(eid)) continue
-      for (const [name, value] of Object.entries(comps)) ensure(eid)[name] = value
-    }
-    // editor edits override the baseline with the live value (and add new components)
-    for (const key of state.editedComponents) {
-      const [eid, name] = split(key)
-      if (state.deletedEntities.has(eid)) continue
-      const v = live[eid]?.[name]
-      if (v !== undefined) ensure(eid)[name] = v
-    }
-    // editor-removed components
-    for (const key of state.deletedComponents) {
-      const [eid, name] = split(key)
-      if (authored[eid] !== undefined) delete authored[eid][name]
-    }
+export function cancelSaveDialog(): void {
+  state.saveDialog = null
+  state.saveStatus = ''
+}
 
-    // Protocol components arrive in engine form (a protobuf oneof as `{case: val}` with no
-    // `$case`), which the composite instancer drops on load. Convert them to SDK form using each
-    // component's schema. Custom components are already SDK form (decoded via the SDK schema).
+// Build the composite from the baseline + the dialog's selections, convert protocol values to SDK
+// form, and ship it to /save_composite (the engine owns the destination). Resets the changelog on
+// success — the saved state becomes the new baseline.
+async function writeComposite(
+  initial: Snapshot,
+  rows: DiffRow[],
+  selection: Map<string, DiffSource>
+): Promise<void> {
+  state.saveStatus = 'saving…'
+  try {
+    const authored = buildAuthoredFromSelection(initial, rows, selection)
+
+    // Protocol components are in engine form (a protobuf oneof as `{case: val}` with no `$case`),
+    // which the composite loader drops. Convert them to SDK form via each component's schema;
+    // custom components are already SDK form (decoded via the SDK schema).
     const protoNames = new Set<string>()
     for (const comps of Object.values(authored)) {
       for (const name of Object.keys(comps)) {
@@ -374,10 +391,9 @@ export async function saveComposite(): Promise<void> {
 
     const composite = buildComposite(authored)
     const skipped = unknownComponentNames(authored)
-    // The engine derives the destination from the active scene (local path, else a dialog/picker)
-    // and remembers it, so we just hand over the bytes.
     const path = await BevyApi.consoleCommand('save_composite', [stringToBase64(composite)])
     resetSaveChangelog()
+    state.saveDialog = null
     state.saveStatus =
       skipped.length > 0 ? `saved → ${path} (skipped: ${skipped.join(', ')})` : `saved → ${path}`
   } catch (e) {
@@ -391,6 +407,10 @@ export async function saveComposite(): Promise<void> {
 // gizmo drag (the engine applies it to the bevy entity immediately; the gizmo
 // previews from its own computed position).
 export function fireTransform(entityId: string, json: string): void {
+  // Gizmo drags write the Transform directly (not via writeComponent), so record the edit in the
+  // changelog here too — otherwise the save diff treats a gizmo move as runtime churn. Fired every
+  // frame of the drag; the last call holds the committed pose.
+  markEdited(entityId, 'Transform', JSON.parse(json))
   BevyApi.consoleCommand('set_component', [entityId, 'Transform', json]).catch(
     () => {}
   )

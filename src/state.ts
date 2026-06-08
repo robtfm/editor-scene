@@ -1,5 +1,6 @@
 import { engine } from '@dcl/sdk/ecs'
 import { type LiveSceneInfo } from './bevy-api/interface'
+import { type DiffRow, type DiffSource } from './save-diff'
 
 // crdt_snapshot shape: { "<entityId>": { "<ComponentName>": value, ... }, ... }
 export type Snapshot = Record<string, Record<string, unknown>>
@@ -105,19 +106,32 @@ export const state = {
   deletedComponents: new Set<string>(),
   // entity ids the editor deleted — omitted (with all their components) from the composite.
   deletedEntities: new Set<string>(),
+  // the value the editor last wrote per `${entityId}/${componentName}` — the "editor" source in
+  // the save diff. live may have churned since (tweens etc.), so we can't reuse it.
+  editorValues: new Map<string, unknown>(),
+  // the save diff dialog: null when closed, else the diff rows, the per-row source selection, and
+  // the baseline they were computed against (to rebuild the authored set on confirm).
+  saveDialog: null as
+    | { rows: DiffRow[]; selection: Map<string, DiffSource>; initial: Snapshot }
+    | null,
   // transient status line for the save action.
   saveStatus: ''
 }
 
-// Record an editor edit/removal in the changelog (so save knows it was us, not runtime churn).
-export function markEdited(entityId: string, name: string): void {
-  state.editedComponents.add(`${entityId}/${name}`)
-  state.deletedComponents.delete(`${entityId}/${name}`)
+// Record an editor edit in the changelog (so save knows it was us, not runtime churn), capturing
+// the written value as the "editor" source for the diff.
+export function markEdited(entityId: string, name: string, value: unknown): void {
+  const key = `${entityId}/${name}`
+  state.editedComponents.add(key)
+  state.deletedComponents.delete(key)
+  state.editorValues.set(key, value)
 }
 
 export function markComponentDeleted(entityId: string, name: string): void {
-  state.deletedComponents.add(`${entityId}/${name}`)
-  state.editedComponents.delete(`${entityId}/${name}`)
+  const key = `${entityId}/${name}`
+  state.deletedComponents.add(key)
+  state.editedComponents.delete(key)
+  state.editorValues.delete(key)
 }
 
 export function markEntityDeleted(entityId: string): void {
@@ -129,6 +143,7 @@ export function resetSaveChangelog(): void {
   state.editedComponents.clear()
   state.deletedComponents.clear()
   state.deletedEntities.clear()
+  state.editorValues.clear()
 }
 
 // The engine creates the scrollable link with scroll_position = None and only

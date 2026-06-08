@@ -6,7 +6,8 @@
 
 import * as ecs from '@dcl/sdk/ecs'
 import { Composite } from '@dcl/sdk/ecs'
-import { customComponentDefs } from './custom-components'
+import { customComponentDefs, isCustomComponent } from './custom-components'
+import { state } from './state'
 
 type CompositeDef = { componentName: string; jsonSchema: unknown }
 
@@ -39,21 +40,27 @@ for (const d of customComponentDefs()) {
   DEFS.set(d.componentName, d)
 }
 
-// Engine-managed / non-authored components that leak into the baseline or live snapshot but must
-// not be written to an authored composite. (Expandable as more are observed.)
-const EXCLUDE = new Set<string>(['RealmInfo', 'EngineInfo', 'MainCamera'])
-
 type AuthoredData = Record<string, Record<string, unknown>>
 
 // Entities 1..511 are reserved for the engine (player, camera, etc.) — they're referenced by
 // scenes but never authored, and writing scene components onto them breaks composite instancing.
 // The authored set is the root (0) plus scene entities (>=512).
-function isAuthoredEntity(eid: number): boolean {
+export function isAuthoredEntity(eid: number): boolean {
   return eid === 0 || eid >= 512
 }
 
+// Whether a component is one we can author into a composite: we must have its SDK definition (for
+// the schema), and it must be authored rather than engine-managed. Custom components
+// (asset-packs/inspector/core-schema) are always authored; protocol components only if the engine
+// reports them writable (i.e. they have a scene-write CRDT interface — `/component_names`). That
+// drops the engine→scene state/results (TweenState, RaycastResult, RealmInfo, …) automatically.
+export function isSavableComponent(name: string): boolean {
+  if (!DEFS.has(name)) return false
+  return isCustomComponent(name) || state.componentNames.includes(name)
+}
+
 // Build the main.composite JSON string from authored {entityId: {componentName: value}} data.
-// Components in EXCLUDE or without a known SDK definition are skipped.
+// Reserved entities and non-savable (engine-managed / unknown) components are skipped.
 export function buildComposite(authored: AuthoredData): string {
   type Comp = {
     name: string
@@ -66,7 +73,7 @@ export function buildComposite(authored: AuthoredData): string {
     const eid = Number(entityId)
     if (!Number.isFinite(eid) || !isAuthoredEntity(eid)) continue
     for (const [name, value] of Object.entries(comps)) {
-      if (EXCLUDE.has(name)) continue
+      if (!isSavableComponent(name)) continue
       const def = DEFS.get(name)
       if (def === undefined) continue
       let comp = byComponent.get(def.componentName)
@@ -86,14 +93,14 @@ export function buildComposite(authored: AuthoredData): string {
   return JSON.stringify(Composite.toJson(definition))
 }
 
-// Names present in `authored` with no known SDK definition (so they're skipped) — surfaced so the
-// editor can warn which components weren't persisted.
+// Names present in `authored` that aren't savable (so they're skipped) — surfaced so the editor
+// can warn which components weren't persisted.
 export function unknownComponentNames(authored: AuthoredData): string[] {
   const unknown = new Set<string>()
   for (const [entityId, comps] of Object.entries(authored)) {
     if (!isAuthoredEntity(Number(entityId))) continue
     for (const name of Object.keys(comps)) {
-      if (!EXCLUDE.has(name) && !DEFS.has(name)) unknown.add(name)
+      if (!isSavableComponent(name)) unknown.add(name)
     }
   }
   return [...unknown]

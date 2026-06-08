@@ -42,8 +42,11 @@ import {
   childIdsOf,
   addComponent,
   deleteComponent,
-  saveComposite
+  saveComposite,
+  confirmSaveDialog,
+  cancelSaveDialog
 } from './inspector'
+import { optionForSource, type DiffRow, type DiffSource } from './save-diff'
 import {
   isColor,
   isVector,
@@ -1736,6 +1739,194 @@ function deleteDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// --- save diff dialog ---
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s
+}
+
+// One source option as a toggle button; highlighted when selected.
+function sourceButton(
+  label: string,
+  selected: boolean,
+  onClick: () => void
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={`src-${label}`}
+      uiTransform={{
+        width: 50,
+        height: 20,
+        margin: { right: 4 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: selected ? BUTTON_BG : REVERT_BG }}
+      uiText={{ value: label, fontSize: FS - 3, color: selected ? TEXT : MUTED }}
+      onMouseDown={onClick}
+    />
+  )
+}
+
+function saveDiffRow(
+  row: DiffRow,
+  selection: Map<string, DiffSource>
+): ReactEcs.JSX.Element {
+  const key = `${row.entityId}/${row.component}`
+  const sel = selection.get(key) ?? row.options[0]
+  const chosen = row.cells[sel]
+  const valueText = chosen.present ? truncate(JSON.stringify(chosen.value), 64) : '(removed)'
+  return (
+    <UiEntity
+      key={`sdr-${key}`}
+      uiTransform={{
+        width: '100%',
+        height: 24,
+        flexDirection: 'row',
+        alignItems: 'center',
+        margin: { top: 2 },
+        padding: { left: 10 }
+      }}
+    >
+      <UiEntity
+        uiTransform={{ width: 190, height: 24, alignItems: 'center' }}
+        uiText={{ value: row.component, fontSize: FS - 2, color: TEXT, textAlign: 'middle-left' }}
+      />
+      <UiEntity uiTransform={{ width: 170, height: 24, flexDirection: 'row', alignItems: 'center' }}>
+        {row.options.map((opt) =>
+          sourceButton(opt, sel === opt, () => {
+            selection.set(key, opt)
+          })
+        )}
+      </UiEntity>
+      <UiEntity
+        uiTransform={{ width: 300, height: 24, alignItems: 'center' }}
+        uiText={{ value: valueText, fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
+      />
+    </UiEntity>
+  )
+}
+
+function saveDiffEntity(
+  entityId: string,
+  rows: DiffRow[],
+  selection: Map<string, DiffSource>
+): ReactEcs.JSX.Element {
+  const named = entityName(state.snapshot, entityId)
+  const label = named !== undefined ? `${named} (${entityId})` : entityLabel(entityId)
+  const massSet = (src: DiffSource): void => {
+    for (const row of rows) selection.set(`${row.entityId}/${row.component}`, optionForSource(row, src))
+  }
+  return (
+    <UiEntity
+      key={`sde-${entityId}`}
+      uiTransform={{ width: '100%', flexDirection: 'column', margin: { bottom: 6 } }}
+    >
+      <UiEntity
+        uiTransform={{ width: '100%', height: 24, flexDirection: 'row', alignItems: 'center' }}
+        uiBackground={{ color: VALUE_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: 300, height: 24, alignItems: 'center', padding: { left: 4 } }}
+          uiText={{ value: label, fontSize: FS - 1, color: ACCENT, textAlign: 'middle-left' }}
+        />
+        <UiEntity
+          uiTransform={{ width: 44, height: 24, alignItems: 'center' }}
+          uiText={{ value: 'all:', fontSize: FS - 3, color: MUTED, textAlign: 'middle-right' }}
+        />
+        {(['initial', 'editor', 'live'] as DiffSource[]).map((src) =>
+          sourceButton(src, false, () => {
+            massSet(src)
+          })
+        )}
+      </UiEntity>
+      {rows.map((row) => saveDiffRow(row, selection))}
+    </UiEntity>
+  )
+}
+
+// Modal: the save diff — every differing (entity, component) grouped by entity, each with an
+// initial/editor/live source selector (collapsed on equality), plus per-entity mass-set. Confirm
+// writes the composite from the selections.
+function saveDialogUi(): ReactEcs.JSX.Element | null {
+  const dialog = state.saveDialog
+  if (dialog === null) return null
+  const { rows, selection } = dialog
+
+  const byEntity = new Map<string, DiffRow[]>()
+  for (const row of rows) {
+    const list = byEntity.get(row.entityId) ?? []
+    list.push(row)
+    byEntity.set(row.entityId, list)
+  }
+
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {
+          cancelSaveDialog()
+        }}
+      />
+      <UiEntity
+        uiTransform={{ width: 720, height: 520, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 28, alignItems: 'center', margin: { bottom: 8 } }}
+          uiText={{
+            value: `Save changes — ${rows.length} component${rows.length === 1 ? '' : 's'} changed`,
+            fontSize: FS + 2,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 420,
+            flexDirection: 'column',
+            overflow: 'scroll'
+          }}
+        >
+          {[...byEntity.entries()].map(([eid, eRows]) => saveDiffEntity(eid, eRows, selection))}
+        </UiEntity>
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 36,
+            flexDirection: 'row',
+            alignItems: 'center',
+            margin: { top: 8 }
+          }}
+        >
+          {dialogButton('Save', 90, BUTTON_BG, () => {
+            confirmSaveDialog().catch(console.error)
+          })}
+          {dialogButton('Cancel', 80, REVERT_BG, () => {
+            cancelSaveDialog()
+          })}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Scrollable, filterable list of addable components (those not already on the
 // entity). Falls back to a free-text name input when the catalog is unavailable
 // (e.g. an older engine without /component_names).
@@ -2110,6 +2301,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {componentWindowPanel() ?? []}
       {deleteDialog() ?? []}
       {parentDialog() ?? []}
+      {saveDialogUi() ?? []}
     </UiEntity>
   )
 }
