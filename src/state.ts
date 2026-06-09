@@ -69,6 +69,9 @@ export const state = {
   addComponentOpen: false,
   // filter text for the add-component picker
   addComponentFilter: '',
+  // whether the new-entity dialog is open, and the name typed into it
+  newEntityOpen: false,
+  newEntityName: '',
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
   // per-component typed schema (from /component_schema), keyed by component name

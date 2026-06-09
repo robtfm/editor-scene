@@ -41,6 +41,7 @@ import {
   selectionHasParented,
   childIdsOf,
   addComponent,
+  addEntity,
   deleteComponent,
   saveComposite,
   confirmSaveDialog,
@@ -1787,6 +1788,88 @@ function dialogButton(
   )
 }
 
+// Modal: create a new entity. Prompts for a name; "Add" parents under the scene root, "Add as
+// child" (shown only with an active selection) parents under the active entity.
+function newEntityDialog(): ReactEcs.JSX.Element | null {
+  if (!state.newEntityOpen) return null
+  const active = state.activeEntity
+  const close = (): void => {
+    state.newEntityOpen = false
+    state.newEntityName = ''
+  }
+  const submit = (parent: number): void => {
+    addEntity(state.newEntityName.trim(), parent).catch(console.error)
+    close()
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={close}
+      />
+      <UiEntity
+        uiTransform={{ width: 420, height: 150, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 8 } }}
+          uiText={{ value: 'New Entity', fontSize: FS + 2, color: TEXT, textAlign: 'middle-left' }}
+        />
+        <Input
+          key="new-entity-name"
+          uiTransform={{
+            elementId: 'new-entity-name',
+            width: '100%',
+            height: 28,
+            margin: { bottom: 12 },
+            padding: { left: 4, right: 4 }
+          }}
+          uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+          value={state.newEntityName}
+          placeholder="entity name"
+          fontSize={FS - 1}
+          color={TEXT}
+          textAlign="middle-left"
+          onChange={(v) => {
+            state.newEntityName = v
+          }}
+          onSubmit={() => {
+            submit(0)
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 28, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {dialogButton('Add', 80, BUTTON_BG, () => {
+            submit(0)
+          })}
+          {active !== null
+            ? dialogButton('Add as child', 120, BUTTON_BG, () => {
+                submit(Number(active))
+              })
+            : []}
+          {dialogButton('Cancel', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Modal delete-confirm: backdrop (click to cancel) + a centred box showing the
 // entity, its direct children, and the available delete modes.
 function deleteDialog(): ReactEcs.JSX.Element | null {
@@ -2431,6 +2514,31 @@ export function inspectorUi(): ReactEcs.JSX.Element {
         </UiEntity>
       </UiEntity>
 
+      {/* Tree toolbar (top-left): add entity */}
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: 28,
+          flexDirection: 'row',
+          alignItems: 'center',
+          padding: { left: 6, top: 4, bottom: 2 }
+        }}
+      >
+        <UiEntity
+          uiTransform={{ width: 90, height: 22, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
+          uiText={{ value: '+ Entity', fontSize: FS - 1, color: TEXT }}
+          onMouseDown={
+            state.status === 'ready'
+              ? () => {
+                  state.newEntityOpen = true
+                  state.newEntityName = ''
+                }
+              : undefined
+          }
+        />
+      </UiEntity>
+
       {/* Tree body */}
       <UiEntity
         uiTransform={{
@@ -2473,6 +2581,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {componentWindowPanel() ?? []}
       {deleteDialog() ?? []}
       {parentDialog() ?? []}
+      {newEntityDialog() ?? []}
       {saveDialogUi() ?? []}
     </UiEntity>
   )

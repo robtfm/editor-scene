@@ -12,6 +12,7 @@ import {
   markComponentDeleted,
   markEntityDeleted,
   resetSaveChangelog,
+  selectEntityInTree,
   type ComponentKey,
   type Snapshot
 } from './state'
@@ -23,7 +24,8 @@ import {
   customTimestamp,
   encodeCustomComponent,
   createCustomDefault,
-  stringToBase64
+  stringToBase64,
+  NAME_COMPONENT
 } from './custom-components'
 import { buildComposite, unknownComponentNames } from './composite'
 import {
@@ -282,6 +284,134 @@ export async function addComponent(entityId: string, name: string): Promise<void
     captureTransformDefaults(key)
   } catch {
     /* no schema → nothing to capture */
+  }
+}
+
+// --- add entity ---
+
+// inspector::Nodes tree entry (flat list; children are entity ids). ROOT is entity 0.
+type Node = { entity: number; open?: boolean; children: number[] }
+const ROOT_ENTITY = '0'
+
+// Allocate `count` fresh entity ids from the engine's authoritative allocator (collision-free,
+// correctly generationed), each instantiated scene-side with the given component so @dcl/ecs adopts
+// it. Returns the proto-u32 ids (matching the snapshot's keys).
+async function newEntityIds(
+  componentId: number,
+  base64: string,
+  count: number
+): Promise<number[]> {
+  const reply = await BevyApi.consoleCommand('new_entity', [
+    String(componentId),
+    base64,
+    String(count)
+  ])
+  const ids = JSON.parse(reply) as unknown
+  return Array.isArray(ids) ? ids.filter((n): n is number => typeof n === 'number') : []
+}
+
+// Replicates @dcl/inspector pushChildToNodes: append `child` to `parent`'s children (deduped), and
+// add a node for `child` if it isn't already one. Returns the new flat node list.
+function pushChildToNodes(nodes: Node[], parent: number, child: number): Node[] {
+  let childIsNode = false
+  const next = nodes.map((n) => {
+    if (n.entity === child) childIsNode = true
+    if (n.entity !== parent) return n
+    return n.children.includes(child) ? n : { ...n, children: [...n.children, child] }
+  })
+  // Ensure the parent node exists (it should — ROOT always does in a Hub scene).
+  if (!next.some((n) => n.entity === parent)) next.push({ entity: parent, children: [child] })
+  return childIsNode ? next : [...next, { entity: child, children: [] }]
+}
+
+// Create one or more authored entities, returning their ids. Each spec is a componentName -> value
+// map (snapshot/decoded form); the entity's Nodes parent is taken from its Transform.parent (0 =
+// scene root, the default).
+//
+// Each entity is allocated *and* instantiated by the engine via /new_entity: the engine's allocator
+// hands out a collision-free, correctly-generationed id and writes the entity's Name scene-side, so
+// the scene's @dcl/ecs adopts it on receive (before its next tick) — no scene freeze needed. The
+// remaining components are then written normally; the Name write is recorded in the changelog so the
+// new entity persists on save.
+export async function createEntities(
+  specs: Array<Record<string, unknown>>
+): Promise<number[]> {
+  if (specs.length === 0) return []
+  const ids: number[] = []
+  const nameId = customComponentId(NAME_COMPONENT)
+  try {
+    // Build the new Nodes tree across the whole batch, then write it once.
+    const existing = state.snapshot[ROOT_ENTITY]?.['inspector::Nodes'] as
+      | { value: Node[] }
+      | undefined
+    let nodes: Node[] = existing ? (JSON.parse(JSON.stringify(existing.value)) as Node[]) : []
+
+    for (const components of specs) {
+      const name = components[NAME_COMPONENT] ?? { value: 'Entity' }
+      const nameBytes =
+        nameId !== undefined ? encodeCustomComponent(NAME_COMPONENT, name) : undefined
+      if (nameId === undefined || nameBytes === undefined) {
+        console.error('createEntities: cannot encode Name to instantiate entity')
+        continue
+      }
+      const [id] = await newEntityIds(nameId, nameBytes, 1)
+      if (id === undefined) continue
+      ids.push(id)
+      const eid = String(id)
+
+      // The Name was written engine-side by /new_entity; reflect it locally and record it as our
+      // edit so the new entity persists on save.
+      applyLocalComponent(eid, NAME_COMPONENT, JSON.stringify(name))
+      markEdited(eid, NAME_COMPONENT, JSON.parse(JSON.stringify(name)))
+
+      for (const [n, value] of Object.entries(components)) {
+        if (n === NAME_COMPONENT) continue // already instantiated above
+        await writeComponent(eid, n, JSON.stringify(value))
+      }
+      const parent = (components.Transform as { parent?: number } | undefined)?.parent ?? 0
+      nodes = pushChildToNodes(nodes, parent, id)
+    }
+
+    if (ids.length > 0) {
+      await writeComponent(ROOT_ENTITY, 'inspector::Nodes', JSON.stringify({ value: nodes }))
+    }
+
+    // Wait (bounded) for the running scene to tick the new entities in before refetching, so a
+    // refetch doesn't briefly drop them (and strand a selection on them).
+    const last = ids.length > 0 ? String(ids[ids.length - 1]) : null
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await sleep(SETTLE_MS)
+      await reloadSnapshot()
+      if (last === null || state.snapshot[last] !== undefined) break
+    }
+  } catch (e) {
+    console.error('create_entities failed:', e)
+  }
+  return ids
+}
+
+// Create a single authored entity with a default Transform (parented under `parent`, 0 = scene
+// root) and a Name, then select it. Mirrors the Hub's addChild operation.
+export async function addEntity(name: string, parent: number): Promise<void> {
+  const ids = await createEntities([
+    {
+      // Full default Transform (explicit scale 1 — a partial write would leave scale 0 → invisible).
+      Transform: {
+        position: { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: { x: 1, y: 1, z: 1 },
+        parent
+      },
+      [NAME_COMPONENT]: { value: name || 'Entity' }
+    }
+  ])
+  if (ids.length > 0) {
+    const eid = String(ids[0])
+    state.selected.clear()
+    state.selected.add(eid)
+    state.activeEntity = eid
+    // expand ancestors and scroll the tree to the new row
+    selectEntityInTree(state.snapshot, eid)
   }
 }
 
