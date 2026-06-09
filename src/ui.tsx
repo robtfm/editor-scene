@@ -1895,11 +1895,11 @@ function assetPickerDialog(): ReactEcs.JSX.Element | null {
     : `${matches.length} asset${matches.length === 1 ? '' : 's'}${
         matches.length > shown.length ? ` (showing ${shown.length})` : ''
       }`
-  const pick = (id: string): void => {
+  const pick = (id: string, name: string): void => {
     if (state.assetBusy) return
     state.assetBusy = true
     close()
-    importAsset(id, 0)
+    importAsset(id, 0, name)
       .catch(console.error)
       .then(() => {
         state.assetBusy = false
@@ -1985,7 +1985,7 @@ function assetPickerDialog(): ReactEcs.JSX.Element | null {
                 textAlign: 'middle-left'
               }}
               onMouseDown={() => {
-                pick(a.id)
+                pick(a.id, a.name)
               }}
             />
           ))}
