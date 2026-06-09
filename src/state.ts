@@ -75,7 +75,14 @@ export const state = {
   // asset-import picker: whether it's open, the fetched catalog (slim entries), the search
   // filter, and whether a catalog fetch / asset import is currently in flight.
   assetPickerOpen: false,
-  assetCatalog: [] as Array<{ id: string; name: string; category: string; tags: string[]; pack: string }>,
+  assetCatalog: [] as Array<{
+    id: string
+    name: string
+    category: string
+    tags: string[]
+    pack: string
+    thumbnail?: string | null
+  }>,
   assetFilter: '',
   assetBusy: false,
   // catalog of editable component names (from /component_names), for the picker

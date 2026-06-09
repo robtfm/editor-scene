@@ -40,6 +40,7 @@ export type CatalogEntry = {
   category: string
   tags: string[]
   pack: string
+  thumbnail?: string | null
 }
 
 // Fetch (engine-side) the asset-packs catalog and return the slim asset index for a picker.

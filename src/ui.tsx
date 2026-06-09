@@ -1971,23 +1971,35 @@ function assetPickerDialog(): ReactEcs.JSX.Element | null {
               key={a.id}
               uiTransform={{
                 width: '100%',
-                height: 26,
+                height: 32,
                 flexDirection: 'row',
                 alignItems: 'center',
-                padding: { left: 6, right: 6 },
+                padding: { left: 4, right: 6 },
                 margin: { bottom: 2 }
               }}
               uiBackground={{ color: BUTTON_BG }}
-              uiText={{
-                value: `${a.name}   ${a.pack} · ${a.category}`,
-                fontSize: FS - 2,
-                color: TEXT,
-                textAlign: 'middle-left'
-              }}
               onMouseDown={() => {
                 pick(a.id, a.name)
               }}
-            />
+            >
+              <UiEntity
+                uiTransform={{ width: 26, height: 26, margin: { right: 6 } }}
+                uiBackground={
+                  a.thumbnail
+                    ? { textureMode: 'stretch', texture: { src: a.thumbnail } }
+                    : { color: HEADER_BG }
+                }
+              />
+              <UiEntity
+                uiTransform={{ width: '100%', height: '100%', alignItems: 'center' }}
+                uiText={{
+                  value: `${a.name}   ${a.pack} · ${a.category}`,
+                  fontSize: FS - 2,
+                  color: TEXT,
+                  textAlign: 'middle-left'
+                }}
+              />
+            </UiEntity>
           ))}
         </UiEntity>
         <UiEntity
