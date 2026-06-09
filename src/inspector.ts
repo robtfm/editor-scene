@@ -448,7 +448,17 @@ export async function setComponentValue(
 // Save: diff the three sources (initial / editor / live) over the authored scope and, if anything
 // differs, open the diff dialog for the user to choose per component. With no differences, write
 // the baseline straight away.
+// A local scene (served by `dcl start`) has a `b64-`-prefixed hash that decodes to its project path,
+// so we can write its files back. A deployed/remote scene has a content hash — nowhere to save to.
+export function isLocalScene(): boolean {
+  return state.scene?.hash?.startsWith('b64-') ?? false
+}
+
 export async function saveComposite(): Promise<void> {
+  if (!isLocalScene()) {
+    state.saveStatus = 'save needs a local scene (served by `dcl start`) — clone it locally to edit'
+    return
+  }
   state.saveStatus = 'preparing…'
   try {
     // isSavableComponent gates protocol components on the writable set; make sure it's loaded.

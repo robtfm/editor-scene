@@ -44,6 +44,7 @@ import {
   addEntity,
   deleteComponent,
   saveComposite,
+  isLocalScene,
   confirmSaveDialog,
   cancelSaveDialog
 } from './inspector'
@@ -2613,9 +2614,14 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               justifyContent: 'center',
               margin: { right: 4 }
             }}
-            uiBackground={{ color: BUTTON_BG }}
-            uiText={{ value: 'Save', fontSize: FS - 1, color: TEXT }}
+            uiBackground={{ color: isLocalScene() ? BUTTON_BG : HEADER_BG }}
+            uiText={{
+              value: 'Save',
+              fontSize: FS - 1,
+              color: isLocalScene() ? TEXT : MUTED
+            }}
             onMouseDown={() => {
+              // Disabled-looking on a non-local scene; the click still surfaces why via saveComposite.
               saveComposite().catch(console.error)
             }}
           />
