@@ -7,27 +7,19 @@
 
 import { BevyApi } from './bevy-api'
 import { state, selectEntityInTree, type Snapshot } from './state'
-import { editorNameForComposite } from './composite'
+import { editorNameForComposite, componentIdForName } from './composite'
 import { allocateNamedEntities, writeComponent, reloadSnapshot } from './inspector'
 import { sleep } from './utils'
 
 const COMPOSITE_NAME = 'core-schema::Name'
 const TRANSFORM = 'core::Transform'
 const TRIGGERS = 'asset-packs::Triggers'
+const SYNC_COMPONENTS = 'core-schema::Sync-Components'
+const NETWORK_ENTITY = 'core-schema::Network-Entity'
+const NETWORK_ID_START = 8001 // INSPECTOR_ENUM_ENTITY_ID_START in the Hub
 // asset-packs components whose `id` field is a scene-unique generated number (the id sequence
 // tracked by Counter.value on the root). On import an `id` of '{self}' gets a fresh id.
 const COMPONENTS_WITH_ID = new Set(['asset-packs::Actions', 'asset-packs::States', 'asset-packs::Counter'])
-
-// Behaviour components carrying references we don't remap yet (component-id / counter refs, network
-// ids) — deferred so a stale reference can't be written. Actions/Triggers/Counter/States ARE
-// remapped (id generation + trigger-reference rewrite below).
-const DEFERRED = new Set([
-  'core-schema::Sync-Components',
-  'asset-packs::CounterBar',
-  'asset-packs::Script',
-  'asset-packs::AdminTools',
-  'asset-packs::VideoScreen'
-])
 
 type CompositeComponent = { name: string; data: Record<string, { json: unknown }> }
 type Composite = { version?: number; components: CompositeComponent[] }
@@ -115,6 +107,17 @@ function currentMaxAssetId(snapshot: Snapshot): number {
   return max
 }
 
+// Highest NetworkEntity id in the scene — sync entities get the next id past this (the inspector's
+// enum-entity sequence starts at 8001), so network ids stay unique. Mirrors getNextEnumEntityId.
+function currentMaxNetworkId(snapshot: Snapshot): number {
+  let max = NETWORK_ID_START
+  for (const comps of Object.values(snapshot)) {
+    const n = comps[NETWORK_ENTITY] as { entityId?: unknown } | undefined
+    if (n && typeof n.entityId === 'number') max = Math.max(max, n.entityId)
+  }
+  return max
+}
+
 // Import catalog asset `assetId` into the current scene, parented under `parent` (0 = scene root),
 // and select its root. Requires fetchCatalog() to have run (so the engine cached the catalog).
 export async function importAsset(assetId: string, parent = 0, assetName = 'Asset'): Promise<void> {
@@ -156,10 +159,6 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
       if (comp.name === COMPOSITE_NAME) {
         const v = json as { value?: string } | undefined
         if (v && typeof v.value === 'string') names.set(eid, v.value)
-        continue
-      }
-      if (DEFERRED.has(comp.name)) {
-        console.error(`import: ${comp.name} carries id references not yet remapped, skipped`)
         continue
       }
       const editorName = editorNameForComposite(comp.name)
@@ -218,6 +217,7 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
   // references ({self:Comp} / {N:Comp}) can be remapped to them. Keyed by `${editorName}:${oldEid}`.
   const genIds = new Map<string, number>()
   let nextId = currentMaxAssetId(state.snapshot)
+  let nextNet = currentMaxNetworkId(state.snapshot)
   for (const eid of ordered) {
     const m = comps.get(eid)
     if (!m) continue
@@ -267,6 +267,27 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     const m = comps.get(eid)
     if (m) {
       for (const [editorName, raw] of m) {
+        // SyncComponents: its value is a list of component NAMES — resolve them to component ids,
+        // and pair it with a NetworkEntity (a fresh enum-entity id) so the runtime syncs this entity.
+        if (editorName === SYNC_COMPONENTS) {
+          const raw_names = (raw as { value?: unknown }).value
+          const componentIds = (Array.isArray(raw_names) ? raw_names : [])
+            .filter((n): n is string => typeof n === 'string')
+            .map(componentIdForName)
+            .filter((id): id is number => id !== undefined)
+          try {
+            await writeComponent(newIdStr, SYNC_COMPONENTS, JSON.stringify({ componentIds }))
+            nextNet += 1
+            await writeComponent(
+              newIdStr,
+              NETWORK_ENTITY,
+              JSON.stringify({ entityId: nextNet, networkId: 0 })
+            )
+          } catch (e) {
+            console.error(`import: failed to write sync components on ${newIdStr}:`, e)
+          }
+          continue
+        }
         let value = raw
         // id-bearing component: stamp its generated id
         if (COMPONENTS_WITH_ID.has(editorName)) {

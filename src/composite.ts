@@ -6,7 +6,7 @@
 
 import * as ecs from '@dcl/sdk/ecs'
 import { Composite } from '@dcl/sdk/ecs'
-import { customComponentDefs, isCustomComponent } from './custom-components'
+import { customComponentDefs, isCustomComponent, customComponentId } from './custom-components'
 import { state } from './state'
 
 type CompositeDef = { componentName: string; jsonSchema: unknown }
@@ -31,13 +31,25 @@ function isComponentDef(
   )
 }
 
+// Engine component name (e.g. "core::Animator") -> numeric component id, for protocol components.
+// Used (with customComponentId for custom ones) to resolve SyncComponents' component-name list to
+// the ids the runtime expects. Ids are protocol-fixed / name-derived, so they match the scene's.
+const COMPONENT_ID_BY_NAME = new Map<string, number>()
+
 for (const [key, val] of Object.entries(ecs as Record<string, unknown>)) {
   if (isComponentDef(val)) {
     DEFS.set(key, { componentName: val.componentName, jsonSchema: val.schema.jsonSchema })
+    COMPONENT_ID_BY_NAME.set(val.componentName, val.componentId)
   }
 }
 for (const d of customComponentDefs()) {
   DEFS.set(d.componentName, d)
+}
+
+// The numeric component id for an engine component name (protocol via the SDK exports, custom via
+// the registry), or undefined if unknown.
+export function componentIdForName(name: string): number | undefined {
+  return COMPONENT_ID_BY_NAME.get(name) ?? customComponentId(name)
 }
 
 // Reverse of DEFS: composite component name (e.g. "core::Transform", "asset-packs::Actions") ->
