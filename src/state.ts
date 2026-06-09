@@ -72,6 +72,12 @@ export const state = {
   // whether the new-entity dialog is open, and the name typed into it
   newEntityOpen: false,
   newEntityName: '',
+  // asset-import picker: whether it's open, the fetched catalog (slim entries), the search
+  // filter, and whether a catalog fetch / asset import is currently in flight.
+  assetPickerOpen: false,
+  assetCatalog: [] as Array<{ id: string; name: string; category: string; tags: string[]; pack: string }>,
+  assetFilter: '',
+  assetBusy: false,
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
   // per-component typed schema (from /component_schema), keyed by component name

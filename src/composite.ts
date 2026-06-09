@@ -40,6 +40,18 @@ for (const d of customComponentDefs()) {
   DEFS.set(d.componentName, d)
 }
 
+// Reverse of DEFS: composite component name (e.g. "core::Transform", "asset-packs::Actions") ->
+// editor/snapshot name (e.g. "Transform"; custom names map to themselves). Used by composite import
+// to translate a catalog composite's component names into the names writeComponent expects.
+const COMPOSITE_TO_EDITOR = new Map<string, string>()
+for (const [editorName, def] of DEFS) {
+  COMPOSITE_TO_EDITOR.set(def.componentName, editorName)
+}
+
+export function editorNameForComposite(compositeName: string): string | undefined {
+  return COMPOSITE_TO_EDITOR.get(compositeName)
+}
+
 type AuthoredData = Record<string, Record<string, unknown>>
 
 // Entities 1..511 are reserved for the engine (player, camera, etc.) — they're referenced by

@@ -48,6 +48,7 @@ import {
   cancelSaveDialog
 } from './inspector'
 import { optionForSource, type DiffRow, type DiffSource } from './save-diff'
+import { fetchCatalog, importAsset } from './import'
 import {
   isColor,
   isVector,
@@ -1870,6 +1871,135 @@ function newEntityDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Modal asset-import picker: backdrop + a search box and a scrollable list of catalog assets.
+// Clicking an asset imports it (engine fetches+registers its files, the editor instances the
+// returned composite) under the scene root. The catalog is fetched lazily when the dialog opens.
+function assetPickerDialog(): ReactEcs.JSX.Element | null {
+  if (!state.assetPickerOpen) return null
+  const close = (): void => {
+    state.assetPickerOpen = false
+  }
+  const filter = state.assetFilter.trim().toLowerCase()
+  const matches = state.assetCatalog.filter((a) => {
+    if (filter === '') return true
+    return (
+      a.name.toLowerCase().includes(filter) ||
+      a.category.toLowerCase().includes(filter) ||
+      a.pack.toLowerCase().includes(filter) ||
+      a.tags.some((t) => t.toLowerCase().includes(filter))
+    )
+  })
+  const shown = matches.slice(0, 200)
+  const status = state.assetBusy
+    ? 'working…'
+    : `${matches.length} asset${matches.length === 1 ? '' : 's'}${
+        matches.length > shown.length ? ` (showing ${shown.length})` : ''
+      }`
+  const pick = (id: string): void => {
+    if (state.assetBusy) return
+    state.assetBusy = true
+    close()
+    importAsset(id, 0)
+      .catch(console.error)
+      .then(() => {
+        state.assetBusy = false
+      })
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={close}
+      />
+      <UiEntity
+        uiTransform={{ width: 480, height: 460, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 8 } }}
+          uiText={{ value: 'Import Asset', fontSize: FS + 2, color: TEXT, textAlign: 'middle-left' }}
+        />
+        <Input
+          key="asset-filter"
+          uiTransform={{
+            elementId: 'asset-filter',
+            width: '100%',
+            height: 28,
+            margin: { bottom: 8 },
+            padding: { left: 4, right: 4 }
+          }}
+          uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+          value={state.assetFilter}
+          placeholder="search name / category / pack / tag"
+          fontSize={FS - 1}
+          color={TEXT}
+          textAlign="middle-left"
+          onChange={(v) => {
+            state.assetFilter = v
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 18, margin: { bottom: 4 } }}
+          uiText={{ value: status, fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 340,
+            flexDirection: 'column',
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
+          }}
+        >
+          {shown.map((a) => (
+            <UiEntity
+              key={a.id}
+              uiTransform={{
+                width: '100%',
+                height: 26,
+                flexDirection: 'row',
+                alignItems: 'center',
+                padding: { left: 6, right: 6 },
+                margin: { bottom: 2 }
+              }}
+              uiBackground={{ color: BUTTON_BG }}
+              uiText={{
+                value: `${a.name}   ${a.pack} · ${a.category}`,
+                fontSize: FS - 2,
+                color: TEXT,
+                textAlign: 'middle-left'
+              }}
+              onMouseDown={() => {
+                pick(a.id)
+              }}
+            />
+          ))}
+        </UiEntity>
+        <UiEntity
+          uiTransform={{ width: '100%', height: 28, flexDirection: 'row', margin: { top: 8 } }}
+        >
+          {dialogButton('Close', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Modal delete-confirm: backdrop (click to cancel) + a centred box showing the
 // entity, its direct children, and the available delete modes.
 function deleteDialog(): ReactEcs.JSX.Element | null {
@@ -2537,6 +2667,36 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               : undefined
           }
         />
+        <UiEntity
+          uiTransform={{
+            width: 90,
+            height: 22,
+            margin: { left: 6 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
+          uiText={{ value: '+ Asset', fontSize: FS - 1, color: TEXT }}
+          onMouseDown={
+            state.status === 'ready'
+              ? () => {
+                  state.assetPickerOpen = true
+                  state.assetFilter = ''
+                  if (state.assetCatalog.length === 0 && !state.assetBusy) {
+                    state.assetBusy = true
+                    fetchCatalog()
+                      .then((c) => {
+                        state.assetCatalog = c
+                      })
+                      .catch(console.error)
+                      .then(() => {
+                        state.assetBusy = false
+                      })
+                  }
+                }
+              : undefined
+          }
+        />
       </UiEntity>
 
       {/* Tree body */}
@@ -2582,6 +2742,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {deleteDialog() ?? []}
       {parentDialog() ?? []}
       {newEntityDialog() ?? []}
+      {assetPickerDialog() ?? []}
       {saveDialogUi() ?? []}
     </UiEntity>
   )

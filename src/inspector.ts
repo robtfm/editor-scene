@@ -180,7 +180,7 @@ export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
 // components — which the engine can't address by name — are encoded with the SDK schema and
 // written via /set_component_raw, carrying a timestamp newer than the snapshot's so the write
 // wins LWW. Everything else goes through /set_component as JSON.
-async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
+export async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
   applyLocalComponent(entityId, name, json)
   markEdited(entityId, name, JSON.parse(json))
   if (isCustomComponent(name)) {
@@ -315,30 +315,48 @@ async function newEntityIds(
 // remaining components are then written normally; the Name write is recorded in the changelog so the
 // new entity persists on save. inspector::Nodes is NOT touched here — it's regenerated from the
 // Transform hierarchy at save time (see buildComposite), so it never shows as a session edit.
+// Allocate `names.length` fresh entities, each instantiated engine-side with its Name (via
+// /new_entity, so @dcl/ecs adopts it before the next tick) and the Name recorded as our edit so it
+// persists on save. Returns the new ids 1:1 with `names` (null where allocation failed). Shared by
+// single-entity creation and composite import (which needs all ids up front to remap parent refs).
+export async function allocateNamedEntities(
+  names: Array<{ value: string }>
+): Promise<Array<number | null>> {
+  const nameId = customComponentId(NAME_COMPONENT)
+  const out: Array<number | null> = []
+  for (const name of names) {
+    const nameBytes =
+      nameId !== undefined ? encodeCustomComponent(NAME_COMPONENT, name) : undefined
+    if (nameId === undefined || nameBytes === undefined) {
+      console.error('allocateNamedEntities: cannot encode Name to instantiate entity')
+      out.push(null)
+      continue
+    }
+    const [id] = await newEntityIds(nameId, nameBytes, 1)
+    if (id === undefined) {
+      out.push(null)
+      continue
+    }
+    const eid = String(id)
+    applyLocalComponent(eid, NAME_COMPONENT, JSON.stringify(name))
+    markEdited(eid, NAME_COMPONENT, JSON.parse(JSON.stringify(name)))
+    out.push(id)
+  }
+  return out
+}
+
 export async function createEntities(
   specs: Array<Record<string, unknown>>
 ): Promise<number[]> {
   if (specs.length === 0) return []
   const ids: number[] = []
-  const nameId = customComponentId(NAME_COMPONENT)
   try {
     for (const components of specs) {
-      const name = components[NAME_COMPONENT] ?? { value: 'Entity' }
-      const nameBytes =
-        nameId !== undefined ? encodeCustomComponent(NAME_COMPONENT, name) : undefined
-      if (nameId === undefined || nameBytes === undefined) {
-        console.error('createEntities: cannot encode Name to instantiate entity')
-        continue
-      }
-      const [id] = await newEntityIds(nameId, nameBytes, 1)
-      if (id === undefined) continue
+      const name = (components[NAME_COMPONENT] ?? { value: 'Entity' }) as { value: string }
+      const [id] = await allocateNamedEntities([name])
+      if (id === null || id === undefined) continue
       ids.push(id)
       const eid = String(id)
-
-      // The Name was written engine-side by /new_entity; reflect it locally and record it as our
-      // edit so the new entity persists on save.
-      applyLocalComponent(eid, NAME_COMPONENT, JSON.stringify(name))
-      markEdited(eid, NAME_COMPONENT, JSON.parse(JSON.stringify(name)))
 
       for (const [n, value] of Object.entries(components)) {
         if (n === NAME_COMPONENT) continue // already instantiated above
@@ -509,6 +527,8 @@ async function writeComposite(
     const composite = buildComposite(authored)
     const skipped = unknownComponentNames(authored)
     const path = await BevyApi.consoleCommand('save_composite', [stringToBase64(composite)])
+    // Full (untruncated) save result, incl. the imported-asset export summary, to the browser console.
+    console.log(`[save] ${path}`)
     state.savedBaseline = newBaseline
     resetSaveChangelog()
     state.saveDialog = null
