@@ -107,6 +107,9 @@ export function computeSaveDiff(initial: Snapshot, live: Snapshot): DiffRow[] {
 
     for (const name of names) {
       if (!isSavableComponent(name)) continue
+      // inspector::Nodes is regenerated from the hierarchy at save (buildComposite), not edited by
+      // the user — never surface it as a change to review.
+      if (name === 'inspector::Nodes') continue
       const initialC = cell(initial[entityId]?.[name])
       const cells: Record<DiffSource, Cell> = {
         initial: initialC,

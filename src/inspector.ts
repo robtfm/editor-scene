@@ -289,10 +289,6 @@ export async function addComponent(entityId: string, name: string): Promise<void
 
 // --- add entity ---
 
-// inspector::Nodes tree entry (flat list; children are entity ids). ROOT is entity 0.
-type Node = { entity: number; open?: boolean; children: number[] }
-const ROOT_ENTITY = '0'
-
 // Allocate `count` fresh entity ids from the engine's authoritative allocator (collision-free,
 // correctly generationed), each instantiated scene-side with the given component so @dcl/ecs adopts
 // it. Returns the proto-u32 ids (matching the snapshot's keys).
@@ -310,29 +306,15 @@ async function newEntityIds(
   return Array.isArray(ids) ? ids.filter((n): n is number => typeof n === 'number') : []
 }
 
-// Replicates @dcl/inspector pushChildToNodes: append `child` to `parent`'s children (deduped), and
-// add a node for `child` if it isn't already one. Returns the new flat node list.
-function pushChildToNodes(nodes: Node[], parent: number, child: number): Node[] {
-  let childIsNode = false
-  const next = nodes.map((n) => {
-    if (n.entity === child) childIsNode = true
-    if (n.entity !== parent) return n
-    return n.children.includes(child) ? n : { ...n, children: [...n.children, child] }
-  })
-  // Ensure the parent node exists (it should — ROOT always does in a Hub scene).
-  if (!next.some((n) => n.entity === parent)) next.push({ entity: parent, children: [child] })
-  return childIsNode ? next : [...next, { entity: child, children: [] }]
-}
-
 // Create one or more authored entities, returning their ids. Each spec is a componentName -> value
-// map (snapshot/decoded form); the entity's Nodes parent is taken from its Transform.parent (0 =
-// scene root, the default).
+// map (snapshot/decoded form).
 //
 // Each entity is allocated *and* instantiated by the engine via /new_entity: the engine's allocator
 // hands out a collision-free, correctly-generationed id and writes the entity's Name scene-side, so
 // the scene's @dcl/ecs adopts it on receive (before its next tick) — no scene freeze needed. The
 // remaining components are then written normally; the Name write is recorded in the changelog so the
-// new entity persists on save.
+// new entity persists on save. inspector::Nodes is NOT touched here — it's regenerated from the
+// Transform hierarchy at save time (see buildComposite), so it never shows as a session edit.
 export async function createEntities(
   specs: Array<Record<string, unknown>>
 ): Promise<number[]> {
@@ -340,12 +322,6 @@ export async function createEntities(
   const ids: number[] = []
   const nameId = customComponentId(NAME_COMPONENT)
   try {
-    // Build the new Nodes tree across the whole batch, then write it once.
-    const existing = state.snapshot[ROOT_ENTITY]?.['inspector::Nodes'] as
-      | { value: Node[] }
-      | undefined
-    let nodes: Node[] = existing ? (JSON.parse(JSON.stringify(existing.value)) as Node[]) : []
-
     for (const components of specs) {
       const name = components[NAME_COMPONENT] ?? { value: 'Entity' }
       const nameBytes =
@@ -368,12 +344,6 @@ export async function createEntities(
         if (n === NAME_COMPONENT) continue // already instantiated above
         await writeComponent(eid, n, JSON.stringify(value))
       }
-      const parent = (components.Transform as { parent?: number } | undefined)?.parent ?? 0
-      nodes = pushChildToNodes(nodes, parent, id)
-    }
-
-    if (ids.length > 0) {
-      await writeComponent(ROOT_ENTITY, 'inspector::Nodes', JSON.stringify({ value: nodes }))
     }
 
     // Wait (bounded) for the running scene to tick the new entities in before refetching, so a

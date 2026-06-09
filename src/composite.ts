@@ -59,6 +59,35 @@ export function isSavableComponent(name: string): boolean {
   return isCustomComponent(name) || state.componentNames.includes(name)
 }
 
+const INSPECTOR_NODES = 'inspector::Nodes'
+
+// inspector::Nodes flat tree entry; children are entity ids. ROOT is entity 0.
+type Node = { entity: number; open?: boolean; children: number[] }
+
+// Regenerate the inspector::Nodes tree from the authored Transform hierarchy: a root (entity 0)
+// node plus a node per authored entity, each listing its direct children (by Transform.parent).
+// Derived fresh at save time from exactly what's being written, so it always matches the saved
+// scene (and the dialog's per-component choices) rather than drifting and without ever being a
+// tracked session edit. Order is by entity id (we don't track the Hub's manual ordering); `open` is
+// omitted.
+function buildNodes(authored: AuthoredData): Node[] {
+  const ids = Object.keys(authored)
+    .map(Number)
+    .filter((e) => Number.isFinite(e) && isAuthoredEntity(e) && e !== 0)
+    .sort((a, b) => a - b)
+  const childrenOf = new Map<number, number[]>()
+  for (const eid of ids) {
+    const t = authored[String(eid)].Transform as { parent?: number } | undefined
+    const parent = t?.parent ?? 0
+    const list = childrenOf.get(parent)
+    if (list) list.push(eid)
+    else childrenOf.set(parent, [eid])
+  }
+  const nodes: Node[] = [{ entity: 0, children: childrenOf.get(0) ?? [] }]
+  for (const eid of ids) nodes.push({ entity: eid, children: childrenOf.get(eid) ?? [] })
+  return nodes
+}
+
 // Build the main.composite JSON string from authored {entityId: {componentName: value}} data.
 // Reserved entities and non-savable (engine-managed / unknown) components are skipped.
 export function buildComposite(authored: AuthoredData): string {
@@ -83,6 +112,18 @@ export function buildComposite(authored: AuthoredData): string {
       }
       comp.data.set(eid, { data: { $case: 'json', json: value } })
     }
+  }
+
+  // Regenerate inspector::Nodes from the Transform hierarchy, overriding any value carried in
+  // `authored` — so the saved tree matches exactly what's being written.
+  const nodesDef = DEFS.get(INSPECTOR_NODES)
+  if (nodesDef !== undefined) {
+    let comp = byComponent.get(nodesDef.componentName)
+    if (comp === undefined) {
+      comp = { name: nodesDef.componentName, jsonSchema: nodesDef.jsonSchema, data: new Map() }
+      byComponent.set(nodesDef.componentName, comp)
+    }
+    comp.data.set(0, { data: { $case: 'json', json: { value: buildNodes(authored) } } })
   }
 
   const definition = {
