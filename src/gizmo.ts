@@ -358,7 +358,10 @@ export function setupGizmo(): void {
 
   const tg = engine.addEntity()
   Transform.create(tg, { parent: root })
-  VisibilityComponent.create(tg, { visible: true, propagateToChildren: true })
+  // All groups start hidden — showGroup(mode) reveals the active one. (Starting visible leaks a
+  // stale gizmo at the origin: showGroup(null) no-ops while lastMode is still null, and the shared
+  // overlay panel composites it as soon as relation lines turn on.)
+  VisibilityComponent.create(tg, { visible: false, propagateToChildren: true })
   makeArrow(tg, 'x')
   makeArrow(tg, 'y')
   makeArrow(tg, 'z')
