@@ -1,6 +1,6 @@
 import { BevyApi } from './bevy-api'
 import { autoLogin } from './login'
-import { compareSchemas } from './schema-compare'
+import { validateCurated } from './curated'
 import { getCurrentInspectableScene } from './current-scene'
 import {
   state,
@@ -49,9 +49,8 @@ export async function startInspector(): Promise<void> {
   await refresh()
   // Best-effort, independent of the scene — populates the add-component picker.
   loadComponentNames().catch(console.error)
-  // Migration harness: verify the scene-side curated overlay matches the engine's combined schema.
-  // (Temporary — remove once the editor consumes the raw schema + scene overlay directly.)
-  compareSchemas().catch(console.error)
+  // Surface any invalid hand-edited curated.json entries at startup.
+  for (const e of validateCurated()) console.error(`[curated] ${e}`)
 }
 
 // Resolve the current non-portable scene, pin it as the inspection target, then

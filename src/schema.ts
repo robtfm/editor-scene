@@ -1,6 +1,7 @@
 import { BevyApi } from './bevy-api'
 import { state, type ComponentKey } from './state'
 import { fieldKey, currentNumber, setFieldProgrammatic, joinPath } from './fields'
+import { applyCurated, TRANSFORM_SCHEMA } from './curated'
 
 // channel layouts for the composite leaves, edited via per-channel widgets
 const CHANNELS: Record<string, string[]> = {
@@ -140,9 +141,15 @@ export function captureTransformDefaults(key: ComponentKey): void {
 // schema in hand before converting engine-form values.
 export async function loadSchema(name: string): Promise<void> {
   if (state.schemas.has(name)) return
+  // Transform is scene-owned (not in the engine's structural schema).
+  if (name === 'Transform') {
+    state.schemas.set(name, TRANSFORM_SCHEMA)
+    return
+  }
   try {
     const reply = await BevyApi.consoleCommand('component_schema', [name])
-    state.schemas.set(name, JSON.parse(reply))
+    // The engine returns the raw structural schema; apply the curated overlay (curated.json) here.
+    state.schemas.set(name, applyCurated(JSON.parse(reply) as ComponentSchema))
   } catch {
     /* leave unset */
   }
@@ -200,11 +207,16 @@ export function toSdkValue(value: unknown, node: SchemaNode): unknown {
 // Fetch (once) the schema for a component, caching it. Best-effort.
 export function ensureSchema(name: string): void {
   if (state.schemas.has(name) || state.schemaPending.has(name)) return
+  if (name === 'Transform') {
+    state.schemas.set(name, TRANSFORM_SCHEMA)
+    return
+  }
   state.schemaPending.add(name)
   BevyApi.consoleCommand('component_schema', [name])
     .then((reply) => {
       try {
-        state.schemas.set(name, JSON.parse(reply))
+        // Raw structural schema from the engine + the curated overlay (curated.json).
+        state.schemas.set(name, applyCurated(JSON.parse(reply) as ComponentSchema))
       } catch {
         /* leave unset; editor falls back to value-shape rendering */
       }
