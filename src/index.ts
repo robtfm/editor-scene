@@ -9,6 +9,7 @@ import { startSelectBox } from './overlay'
 import { startSystemActions } from './system-actions'
 import { startHighlightSync } from './highlight'
 import { setupMeshSelect } from './mesh-select'
+import { setupInteract } from './interact'
 
 export function main(): void {
   const _log = console.log
@@ -24,6 +25,7 @@ export function main(): void {
   startSystemActions()
   startHighlightSync()
   setupMeshSelect()
+  setupInteract()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {
