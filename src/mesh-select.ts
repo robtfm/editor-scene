@@ -16,6 +16,21 @@ import { originals, isOverlaid } from './overlays'
 // Inert otherwise: a 128 collider only answers a 128-mask query (physics/pointer/scene casts ignore it).
 const PICK_LAYER = 128
 const GLTF = 'GltfContainer'
+const MESH_RENDERER = 'MeshRenderer'
+const MESH_COLLIDER = 'MeshCollider'
+
+// Map a MeshRenderer's shape (engine-form oneof) to the matching MeshCollider shape, dropping the
+// renderer-only fields (uvs). Used to give primitive renderers a pickable collider of the same shape.
+function colliderMeshFromRenderer(mesh: unknown): Record<string, unknown> | undefined {
+  if (typeof mesh !== 'object' || mesh === null) return undefined
+  const m = mesh as Record<string, unknown>
+  if ('box' in m) return { box: {} }
+  if ('sphere' in m) return { sphere: {} }
+  if ('cylinder' in m) return { cylinder: { ...(m.cylinder as object) } }
+  if ('plane' in m) return { plane: {} }
+  if ('gltf' in m) return { gltf: { ...(m.gltf as object) } }
+  return undefined
+}
 
 let picker: Entity | null = null
 let rayTs = 0
@@ -30,16 +45,34 @@ export function setupMeshSelect(): void {
   })
 }
 
-// Apply the pick-collider overlay (visibleMeshesCollisionMask |= 128) to each GltfContainer entity
-// not yet overlaid, so its visible meshes become pickable. Idempotent; the overlay core reverts it
-// for display and save. NB: changing GltfContainer reloads the gltf, so this is a one-time reload
-// per entity (the isOverlaid guard prevents re-applying).
+// Make every renderable entity pickable on the editor layer (128), idempotently. The overlay core
+// reverts these for display and save.
+//  - GltfContainer: overlay visibleMeshesCollisionMask |= 128 (one-time gltf reload per entity).
+//  - MeshRenderer (primitives): overlay a MeshCollider of the same shape with the 128 bit. NB this
+//    replaces any scene-authored MeshCollider while editing, so a scene that uses a *different*
+//    MeshCollider shape than its MeshRenderer loses that distinction in the editor (accepted).
 function syncPickColliders(): void {
   for (const [id, comps] of Object.entries(state.snapshot)) {
     const gltf = comps[GLTF] as { visibleMeshesCollisionMask?: number } | undefined
-    if (gltf === undefined || isOverlaid(originals, id, GLTF)) continue
-    const mask = (gltf.visibleMeshesCollisionMask ?? 0) | PICK_LAYER
-    applyOverlay(id, GLTF, { ...gltf, visibleMeshesCollisionMask: mask })
+    if (gltf !== undefined) {
+      if (isOverlaid(originals, id, GLTF)) continue
+      applyOverlay(id, GLTF, {
+        ...gltf,
+        visibleMeshesCollisionMask: (gltf.visibleMeshesCollisionMask ?? 0) | PICK_LAYER
+      })
+      continue
+    }
+    const renderer = comps[MESH_RENDERER] as { mesh?: unknown } | undefined
+    if (renderer === undefined || isOverlaid(originals, id, MESH_COLLIDER)) continue
+    const existing = comps[MESH_COLLIDER] as { collisionMask?: number } | undefined
+    const value: Record<string, unknown> = {
+      collisionMask: (existing?.collisionMask ?? 0) | PICK_LAYER
+    }
+    // Map the renderer's shape when set; when it's unset/unmappable, omit mesh — the engine defaults
+    // both a meshless MeshRenderer and a meshless MeshCollider to a box, so they still match.
+    const mesh = colliderMeshFromRenderer(renderer.mesh)
+    if (mesh !== undefined) value.mesh = mesh
+    applyOverlay(id, MESH_COLLIDER, value)
   }
 }
 
