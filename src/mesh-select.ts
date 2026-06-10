@@ -7,8 +7,8 @@ import {
   PrimaryPointerInfo,
   type Entity
 } from '@dcl/sdk/ecs'
-import { state, selectionClick, selectEntityInTree, clearSelection } from './state'
-import { applyOverlay } from './overlay-actions'
+import { state, selectionClick, selectEntityInTree, clearSelection, parentOf } from './state'
+import { applyOverlay, visibilityMode } from './overlay-actions'
 import { originals, isOverlaid } from './overlays'
 
 // CL_RESERVED6 — an editor-only collider layer (scene authors use CL_CUSTOM1..8). We overlay it onto
@@ -88,12 +88,41 @@ export function requestMeshPick(shift: boolean, ctrl: boolean): void {
   Raycast.createOrReplace(picker, {
     timestamp: rayTs,
     maxDistance: 1000,
-    queryType: RaycastQueryType.RQT_HIT_FIRST,
+    // all hits, so we can skip force-hidden entities (whose pick collider is still present) and
+    // select the nearest *visible* one behind them.
+    queryType: RaycastQueryType.RQT_QUERY_ALL,
     continuous: false,
     collisionMask: PICK_LAYER,
     direction: { $case: 'globalDirection', globalDirection: { ...dir } }
   })
   pending = { ts: rayTs, shift, ctrl }
+}
+
+const VISIBILITY = 'VisibilityComponent'
+
+// The scene's effective visibility for an entity, per the DCL propagation rules: an own
+// VisibilityComponent wins; else the nearest ancestor with propagateToChildren; else visible.
+function sceneVisible(id: string): boolean {
+  const own = state.snapshot[id]?.[VISIBILITY] as { visible?: boolean } | undefined
+  if (own !== undefined) return own.visible !== false
+  let cur = parentOf(state.snapshot, id)
+  while (cur !== null) {
+    const vc = state.snapshot[cur]?.[VISIBILITY] as
+      | { visible?: boolean; propagateToChildren?: boolean }
+      | undefined
+    if (vc?.propagateToChildren === true) return vc.visible !== false
+    cur = parentOf(state.snapshot, cur)
+  }
+  return true
+}
+
+// Whether an entity should be mesh-pickable, i.e. effectively visible: a force-show overlay ('+')
+// always picks; a force-hide ('-') never picks; otherwise honour the scene's resolved visibility.
+// So you select what you can actually see.
+function isPickable(id: string): boolean {
+  const mode = visibilityMode(id)
+  if (mode !== '=') return mode === '+'
+  return sceneVisible(id)
 }
 
 // Apply the result of a requested pick once it arrives (matched by timestamp).
@@ -103,9 +132,13 @@ function handlePickResult(): void {
   if (result === null || result.timestamp !== pending.ts) return
   const p = pending
   pending = null
-  const hit = result.hits[0]
+  // nearest hit on a pickable (effectively visible) entity — skip hidden ones and select whatever
+  // visible thing is behind them.
+  const hit = result.hits
+    .filter((h) => h.entityId !== undefined && isPickable(String(h.entityId)))
+    .sort((a, b) => a.length - b.length)[0]
   if (hit === undefined || hit.entityId === undefined) {
-    // miss on a plain click -> clear the selection (additive modifiers leave it)
+    // miss (or only hidden things) on a plain click -> clear the selection (modifiers leave it)
     if (!p.shift && !p.ctrl) clearSelection()
     return
   }
