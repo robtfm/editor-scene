@@ -18,6 +18,7 @@ import {
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
+import { logicalSnapshot } from './overlays'
 import {
   decodeCustomComponents,
   isCustomComponent,
@@ -127,8 +128,11 @@ export async function stepScene(count = 1): Promise<void> {
 export async function reloadSnapshot(): Promise<void> {
   try {
     const reply = await BevyApi.consoleCommand('crdt_snapshot')
-    state.snapshot = JSON.parse(reply) as Snapshot
-    decodeCustomComponents(state.snapshot)
+    const raw = JSON.parse(reply) as Snapshot
+    decodeCustomComponents(raw)
+    // Revert any editor overlays the engine echoed back, so the editor always works against the
+    // true scene state (overlays are engine-only; see overlay-actions.ts).
+    state.snapshot = logicalSnapshot(raw)
     state.status = 'ready'
     primeScroll()
   } catch (e) {
