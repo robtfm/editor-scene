@@ -2858,9 +2858,9 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
     <UiEntity
       uiTransform={{
         width: 500,
-        height: '92%',
         positionType: 'absolute',
-        position: { top: '4%', left: 12 },
+        // start below the top toolbar (~70px) so they don't overlap on narrow screens
+        position: { top: 76, bottom: 12, left: 12 },
         flexDirection: 'column',
         pointerFilter: 'block'
       }}
@@ -2980,9 +2980,9 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       <UiEntity
         uiTransform={{
           width: 500,
-          height: '92%',
           positionType: 'absolute',
-          position: { top: '4%', right: 12 },
+          // start below the top toolbar (~70px) so they don't overlap on narrow screens
+          position: { top: 76, bottom: 12, right: 12 },
           flexDirection: 'column'
         }}
         uiBackground={{ color: PANEL_BG }}
