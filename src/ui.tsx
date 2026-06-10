@@ -2207,20 +2207,44 @@ function filePickerDialog(): ReactEcs.JSX.Element | null {
     state.filePicker = null
   }
   const exts = CONTENT_FILE_EXTS[picker.kind] ?? []
+  const folder = state.filePickerFolder // '' (root) or 'a/b/'
   const filter = state.filePickerFilter.trim().toLowerCase()
-  const matches = state.contentFiles.filter((f) => {
+  // extension-matching files under the current folder
+  const underFolder = state.contentFiles.filter((f) => {
     if (exts.length > 0 && !exts.some((e) => f.endsWith(`.${e}`))) return false
-    return filter === '' || f.includes(filter)
+    return f.startsWith(folder)
   })
-  const shown = matches.slice(0, 500)
+  // split the folder's contents into immediate subfolders and direct files (filtered by the search)
+  const subfolders = new Set<string>()
+  const files: string[] = []
+  for (const f of underFolder) {
+    const rest = f.slice(folder.length)
+    const slash = rest.indexOf('/')
+    if (slash >= 0) subfolders.add(rest.slice(0, slash))
+    else files.push(rest)
+  }
+  const folderList = [...subfolders].filter((d) => filter === '' || d.includes(filter)).sort()
+  const fileList = files.filter((n) => filter === '' || n.includes(filter)).sort()
+  const shownFiles = fileList.slice(0, 500)
   const status = state.contentBusy
     ? 'loading…'
-    : `${matches.length} file${matches.length === 1 ? '' : 's'}${
-        exts.length > 0 ? ` · .${exts.join(' .')}` : ''
-      }${matches.length > shown.length ? ` (showing ${shown.length})` : ''}`
-  const pick = (file: string): void => {
+    : `${folderList.length} folder${folderList.length === 1 ? '' : 's'}, ${fileList.length} file${
+        fileList.length === 1 ? '' : 's'
+      }${exts.length > 0 ? ` · .${exts.join(' .')}` : ''}`
+  const goRoot = (): void => {
+    state.filePickerFolder = ''
+  }
+  const goUp = (): void => {
+    const trimmed = folder.replace(/\/$/, '')
+    const i = trimmed.lastIndexOf('/')
+    state.filePickerFolder = i >= 0 ? trimmed.slice(0, i + 1) : ''
+  }
+  const enter = (name: string): void => {
+    state.filePickerFolder = `${folder}${name}/`
+  }
+  const pick = (name: string): void => {
     // programmatic so the field Input re-mounts with the picked path (typing keeps its own state)
-    setFieldProgrammatic(picker.key, picker.path, file)
+    setFieldProgrammatic(picker.key, picker.path, `${folder}${name}`)
     close()
   }
   return (
@@ -2271,6 +2295,27 @@ function filePickerDialog(): ReactEcs.JSX.Element | null {
             state.filePickerFilter = v
           }}
         />
+        {/* Folder nav: ~ (root), .. (up), and the current path */}
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, flexDirection: 'row', alignItems: 'center', margin: { bottom: 4 } }}
+        >
+          <UiEntity
+            uiTransform={{ width: 28, height: 22, margin: { right: 4 }, alignItems: 'center', justifyContent: 'center' }}
+            uiBackground={{ color: folder === '' ? REVERT_BG : BUTTON_BG }}
+            uiText={{ value: '~', fontSize: FS, color: folder === '' ? MUTED : TEXT }}
+            onMouseDown={folder === '' ? undefined : goRoot}
+          />
+          <UiEntity
+            uiTransform={{ width: 28, height: 22, margin: { right: 8 }, alignItems: 'center', justifyContent: 'center' }}
+            uiBackground={{ color: folder === '' ? REVERT_BG : BUTTON_BG }}
+            uiText={{ value: '..', fontSize: FS, color: folder === '' ? MUTED : TEXT }}
+            onMouseDown={folder === '' ? undefined : goUp}
+          />
+          <UiEntity
+            uiTransform={{ width: '100%', height: 22, alignItems: 'center' }}
+            uiText={{ value: `/${folder}`, fontSize: FS - 2, color: MUTED, textAlign: 'middle-left' }}
+          />
+        </UiEntity>
         <UiEntity
           uiTransform={{ width: '100%', height: 18, margin: { bottom: 4 } }}
           uiText={{ value: status, fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
@@ -2278,15 +2323,32 @@ function filePickerDialog(): ReactEcs.JSX.Element | null {
         <UiEntity
           uiTransform={{
             width: '100%',
-            height: 320,
+            height: 296,
             flexDirection: 'column',
             overflow: 'scroll',
             scrollVisible: 'vertical'
           }}
         >
-          {shown.map((f, i) => (
+          {folderList.map((d) => (
             <UiEntity
-              key={`${i}-${f}`}
+              key={`d-${d}`}
+              uiTransform={{
+                width: '100%',
+                height: 24,
+                alignItems: 'center',
+                padding: { left: 4, right: 6 },
+                margin: { bottom: 1 }
+              }}
+              uiBackground={{ color: HEADER_BG }}
+              uiText={{ value: `▸ ${d}/`, fontSize: FS - 3, color: TEXT, textAlign: 'middle-left' }}
+              onMouseDown={() => {
+                enter(d)
+              }}
+            />
+          ))}
+          {shownFiles.map((n, i) => (
+            <UiEntity
+              key={`f-${i}-${n}`}
               uiTransform={{
                 width: '100%',
                 height: 24,
@@ -2295,9 +2357,9 @@ function filePickerDialog(): ReactEcs.JSX.Element | null {
                 margin: { bottom: 1 }
               }}
               uiBackground={{ color: i % 2 === 0 ? PANEL_BG : BUTTON_BG }}
-              uiText={{ value: f, fontSize: FS - 3, color: TEXT, textAlign: 'middle-left' }}
+              uiText={{ value: n, fontSize: FS - 3, color: TEXT, textAlign: 'middle-left' }}
               onMouseDown={() => {
-                pick(f)
+                pick(n)
               }}
             />
           ))}

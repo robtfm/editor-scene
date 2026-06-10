@@ -97,6 +97,9 @@ export const state = {
   // contentFiles list with the viewer. Null when closed.
   filePicker: null as { key: ComponentKey; path: string; kind: string } | null,
   filePickerFilter: '',
+  // the picker's current folder (path prefix ending in '/', or '' for root). Retained across
+  // invocations so re-opening lands where you left off.
+  filePickerFolder: '',
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
   // per-component typed schema (from /component_schema), keyed by component name
