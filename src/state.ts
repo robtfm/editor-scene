@@ -92,6 +92,11 @@ export const state = {
   contentFiles: [] as string[],
   contentFilter: '',
   contentBusy: false,
+  // content-file picker (for contentFile:* fields): the field being edited and the semantic kind
+  // (gltf/audio/any) used to filter by extension, plus the picker's own search filter. Shares the
+  // contentFiles list with the viewer. Null when closed.
+  filePicker: null as { key: ComponentKey; path: string; kind: string } | null,
+  filePickerFilter: '',
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
   // per-component typed schema (from /component_schema), keyed by component name

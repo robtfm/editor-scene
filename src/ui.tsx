@@ -61,6 +61,7 @@ import {
   currentBool,
   currentString,
   setField,
+  setFieldProgrammatic,
   fieldRev
 } from './fields'
 import {
@@ -364,6 +365,72 @@ function stringField(
         onChange={(v) => {
           setField(key, path, v)
         }}
+      />
+    </UiEntity>
+  )
+}
+
+// contentFile:<kind> → the file extensions to offer in the picker. Empty = no filter (any file).
+// Paths in the content map are lowercased, so extensions are matched case-insensitively.
+const CONTENT_FILE_EXTS: Record<string, string[]> = {
+  gltf: ['glb', 'gltf'],
+  audio: ['mp3', 'ogg', 'wav'],
+  any: []
+}
+
+// Open the content-file picker for a field. Loads/refreshes the scene's content map (so externally
+// added files appear) and records which field + extension kind the selection should write back to.
+function openFilePicker(key: ComponentKey, path: string, kind: string): void {
+  if (fieldsDisabled) return
+  state.filePicker = { key, path, kind }
+  state.filePickerFilter = ''
+  loadSceneContent()
+}
+
+// A contentFile field: the editable path input plus a "…" button that opens the picker. The path is
+// still free-text (so manual entry / cleared values work), the picker just fills it from the scene.
+function contentFileField(
+  key: ComponentKey,
+  path: string,
+  label: string,
+  value: string,
+  kind: string
+): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={path}
+      uiTransform={{
+        width: '100%',
+        height: 24,
+        flexDirection: 'row',
+        alignItems: 'center',
+        margin: { bottom: 2 }
+      }}
+    >
+      {fieldLabel(label, 150)}
+      <Input
+        key={`${path}:${value}:${fieldRev(key, path)}`}
+        uiTransform={{
+          elementId: elementIdFor(key, path),
+          width: 164,
+          height: 22,
+          padding: { left: 4, right: 4 }
+        }}
+        uiBackground={{ color: VALUE_BG }}
+        value={currentString(key, path, value)}
+        fontSize={FS - 1}
+        color={fieldsDisabled ? MUTED : TEXT}
+        textAlign="middle-left"
+        disabled={fieldsDisabled}
+        onChange={(v) => {
+          setField(key, path, v)
+        }}
+      />
+      <UiEntity
+        uiTransform={{ width: 32, height: 22, margin: { left: 4 }, alignItems: 'center', justifyContent: 'center' }}
+        uiBackground={{ color: fieldsDisabled ? REVERT_BG : BUTTON_BG }}
+        uiText={{ value: '…', fontSize: FS, color: fieldsDisabled ? MUTED : TEXT }}
+        onMouseDown={fieldsDisabled ? undefined : () => openFilePicker(key, path, kind)}
       />
     </UiEntity>
   )
@@ -858,10 +925,11 @@ function schemaLeaf(
     case 'textureUnion':
     case 'borderRect':
       return rawFieldRow(key, path, label, base ?? node.default)
+    case 'contentFile':
+      return contentFileField(key, path, label, strFallback(base, node), node.semantic.split(':')[1] ?? 'any')
     case 'string':
     case 'url':
     case 'urlOrContent':
-    case 'contentFile':
     case 'urn':
     case 'userRef':
     case 'gltfNodePath':
@@ -2130,6 +2198,124 @@ function contentViewerDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Modal: content-file picker for a contentFile:* field. Lists the scene's content map filtered to
+// the field's extension kind (+ a text filter); clicking a file writes it into the field and closes.
+function filePickerDialog(): ReactEcs.JSX.Element | null {
+  const picker = state.filePicker
+  if (picker === null) return null
+  const close = (): void => {
+    state.filePicker = null
+  }
+  const exts = CONTENT_FILE_EXTS[picker.kind] ?? []
+  const filter = state.filePickerFilter.trim().toLowerCase()
+  const matches = state.contentFiles.filter((f) => {
+    if (exts.length > 0 && !exts.some((e) => f.endsWith(`.${e}`))) return false
+    return filter === '' || f.includes(filter)
+  })
+  const shown = matches.slice(0, 500)
+  const status = state.contentBusy
+    ? 'loading…'
+    : `${matches.length} file${matches.length === 1 ? '' : 's'}${
+        exts.length > 0 ? ` · .${exts.join(' .')}` : ''
+      }${matches.length > shown.length ? ` (showing ${shown.length})` : ''}`
+  const pick = (file: string): void => {
+    // programmatic so the field Input re-mounts with the picked path (typing keeps its own state)
+    setFieldProgrammatic(picker.key, picker.path, file)
+    close()
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={close}
+      />
+      <UiEntity
+        uiTransform={{ width: 560, height: 460, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 8 } }}
+          uiText={{ value: 'Pick File', fontSize: FS + 2, color: TEXT, textAlign: 'middle-left' }}
+        />
+        <Input
+          key="file-picker-filter"
+          uiTransform={{
+            elementId: 'file-picker-filter',
+            width: '100%',
+            height: 28,
+            margin: { bottom: 8 },
+            padding: { left: 4, right: 4 }
+          }}
+          uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+          value={state.filePickerFilter}
+          placeholder="filter path"
+          fontSize={FS - 1}
+          color={TEXT}
+          textAlign="middle-left"
+          onChange={(v) => {
+            state.filePickerFilter = v
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 18, margin: { bottom: 4 } }}
+          uiText={{ value: status, fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 320,
+            flexDirection: 'column',
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
+          }}
+        >
+          {shown.map((f, i) => (
+            <UiEntity
+              key={`${i}-${f}`}
+              uiTransform={{
+                width: '100%',
+                height: 24,
+                alignItems: 'center',
+                padding: { left: 4, right: 6 },
+                margin: { bottom: 1 }
+              }}
+              uiBackground={{ color: i % 2 === 0 ? PANEL_BG : BUTTON_BG }}
+              uiText={{ value: f, fontSize: FS - 3, color: TEXT, textAlign: 'middle-left' }}
+              onMouseDown={() => {
+                pick(f)
+              }}
+            />
+          ))}
+        </UiEntity>
+        <UiEntity
+          uiTransform={{ width: '100%', height: 28, flexDirection: 'row', margin: { top: 8 } }}
+        >
+          {dialogButton('Clear', 80, REVERT_BG, () => {
+            setFieldProgrammatic(picker.key, picker.path, '')
+            close()
+          })}
+          {dialogButton('Cancel', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Modal delete-confirm: backdrop (click to cancel) + a centred box showing the
 // entity, its direct children, and the available delete modes.
 function deleteDialog(): ReactEcs.JSX.Element | null {
@@ -2899,6 +3085,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {newEntityDialog() ?? []}
       {assetPickerDialog() ?? []}
       {contentViewerDialog() ?? []}
+      {filePickerDialog() ?? []}
       {saveDialogUi() ?? []}
     </UiEntity>
   )
