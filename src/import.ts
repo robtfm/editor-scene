@@ -191,10 +191,16 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     return typeof p !== 'number' || !entityIds.has(p)
   }
   const roots = ordered.filter(isRoot)
+  // The asset's single top-level entity (if it has one) takes the asset's name, so the imported
+  // object reads as what the user picked rather than a composite-internal or `Entity_N` name.
+  // Multiple roots get the name on their shared wrapper instead (allocated below).
+  const mainRoot = roots.length === 1 ? roots[0] : null
 
   // --- phase 1: allocate all entities (Name-seeded) so parent refs can be remapped ---
   const newIds = await allocateNamedEntities(
-    ordered.map((eid) => ({ value: names.get(eid) ?? `Entity_${eid}` }))
+    ordered.map((eid) => ({
+      value: eid === mainRoot ? assetName : names.get(eid) ?? `Entity_${eid}`
+    }))
   )
   const idMap = new Map<number, number>()
   ordered.forEach((eid, i) => {
@@ -206,7 +212,7 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
   // object; a single root is used directly.
   let wrapperNew: number | null = null
   if (roots.length > 1) {
-    const [w] = await allocateNamedEntities([{ value: `${assetName}_root` }])
+    const [w] = await allocateNamedEntities([{ value: assetName }])
     if (w != null) {
       wrapperNew = w
       await writeComponent(
