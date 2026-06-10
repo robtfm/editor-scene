@@ -8,7 +8,8 @@
     "build": "sdk-commands build",
     "lint": "eslint \"./src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint --fix \"./src/**/*.{ts,tsx}\"",
-    "upgrade-sdk": "npm install @dcl/sdk@protocol-squad @dcl/js-runtime@protocol-squad @dcl/react-ecs@protocol-squad @dcl/sdk-commands@protocol-squad @dcl/ecs@protocol-squad --save-exact"
+    "upgrade-sdk": "npm install @dcl/sdk@protocol-squad @dcl/js-runtime@protocol-squad @dcl/react-ecs@protocol-squad @dcl/sdk-commands@protocol-squad @dcl/ecs@protocol-squad --save-exact",
+    "test": "esbuild test/overlays.test.ts --bundle --platform=node --outfile=bin/overlays.test.cjs && node bin/overlays.test.cjs"
   },
   "devDependencies": {
     "@dcl/ecs": "7.22.6-25007982108.commit-83012ab",
