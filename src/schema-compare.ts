@@ -5,7 +5,7 @@
 // raw + scene-overlay and the engine overlay can be deleted. Remove this file after the migration.
 
 import { BevyApi } from './bevy-api'
-import { applyCurated, TRANSFORM_SCHEMA } from './curated'
+import { applyCurated, TRANSFORM_SCHEMA, validateCurated } from './curated'
 import type { ComponentSchema } from './schema'
 
 // First differing path between two parsed-JSON values, or null if deep-equal (key-order agnostic).
@@ -33,6 +33,11 @@ function firstDiff(a: unknown, b: unknown, path: string): string | null {
 }
 
 export async function compareSchemas(): Promise<void> {
+  const dataErrors = validateCurated()
+  if (dataErrors.length > 0) {
+    console.error(`[schema-compare] curated.json: ${dataErrors.length} invalid entr(ies)`)
+    for (const e of dataErrors) console.error(`[schema-compare] DATA ${e}`)
+  }
   let combined: Record<string, ComponentSchema>
   let raw: Record<string, ComponentSchema>
   try {
