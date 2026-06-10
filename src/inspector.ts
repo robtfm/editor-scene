@@ -60,9 +60,11 @@ export async function refresh(): Promise<void> {
   state.status = 'loading-snapshot'
   state.error = ''
 
-  const scene = await getCurrentInspectableScene()
+  // Once we've locked onto a scene, stay on it for the rest of the session — never re-derive from
+  // the player's location. We only resolve the player's current parcel scene on the first run (when
+  // nothing is pinned yet); 'no-scene' until the player has been inside an inspectable scene once.
+  const scene = state.scene ?? (await getCurrentInspectableScene())
   if (scene === undefined) {
-    state.scene = undefined
     state.status = 'no-scene'
     return
   }
