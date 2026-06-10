@@ -8,6 +8,7 @@ import {
   toggleRawMode,
   clearComponentEdits,
   setActiveAction,
+  effectiveMode,
   cycleNodeDisplay,
   selectionClick,
   rowElementId,
@@ -1427,7 +1428,8 @@ const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'select', label: 'Select' },
   { id: 'translate', label: 'Translate' },
   { id: 'rotate', label: 'Rotate' },
-  { id: 'scale', label: 'Scale' }
+  { id: 'scale', label: 'Scale' },
+  { id: 'interact', label: 'Interact' }
 ]
 
 // Fullscreen panel showing the gizmo camera's render (composited on top of the
@@ -1834,7 +1836,10 @@ function actionButton(action: {
   id: string
   label: string
 }): ReactEcs.JSX.Element {
-  const active = state.activeAction === action.id
+  // highlight the *effective* mode (so Interact lights up when it's the empty-selection fallback);
+  // Interact is disabled while the scene is paused.
+  const active = effectiveMode() === action.id
+  const disabled = action.id === 'interact' && state.frozen
   return (
     <UiEntity
       key={`action-${action.id}`}
@@ -1845,15 +1850,19 @@ function actionButton(action: {
         alignItems: 'center',
         justifyContent: 'center'
       }}
-      uiBackground={{ color: active ? BUTTON_BG : REVERT_BG }}
+      uiBackground={{ color: disabled ? HEADER_BG : active ? BUTTON_BG : REVERT_BG }}
       uiText={{
         value: action.label,
         fontSize: FS - 1,
-        color: active ? Color4.create(1, 0.97, 0.7, 1) : TEXT
+        color: disabled ? MUTED : active ? Color4.create(1, 0.97, 0.7, 1) : TEXT
       }}
-      onMouseDown={() => {
-        setActiveAction(action.id)
-      }}
+      onMouseDown={
+        disabled
+          ? undefined
+          : () => {
+              setActiveAction(action.id)
+            }
+      }
     />
   )
 }

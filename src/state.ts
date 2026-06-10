@@ -40,11 +40,12 @@ export const state = {
   rawMode: new Set<ComponentKey>(),
   // transient per-component result of the last Apply ('' => none)
   editStatus: new Map<ComponentKey, string>(),
-  // current mode: a tool ('translate'|'rotate'|'scale') or 'select'. Always one
-  // of these — toggling out of select returns to the last tool.
+  // the user's chosen tool: 'select', a transform tool ('translate'|'rotate'|'scale'), or
+  // 'interact'. This just stores the choice; the *effective* mode (see effectiveMode) derives the
+  // real mode from this plus the selection and pause state.
   activeAction: 'select' as string,
-  // the last-used tool, restored when select mode is toggled off
-  lastTool: 'translate' as 'translate' | 'rotate' | 'scale',
+  // the last-used non-select tool, restored when select mode is toggled off
+  lastTool: 'translate' as 'translate' | 'rotate' | 'scale' | 'interact',
   // when to draw node markers: 'always' (all nodes), 'selected' (only selected),
   // 'selecting' (only while in select mode). Select mode always shows all nodes.
   nodeDisplay: 'selected' as 'always' | 'selected' | 'selecting',
@@ -206,17 +207,32 @@ export function rowElementId(id: string): string {
   return `row-${id}`
 }
 
-const TOOLS = ['translate', 'rotate', 'scale']
+const TRANSFORM_TOOLS = ['translate', 'rotate', 'scale']
+const NON_SELECT_TOOLS = ['translate', 'rotate', 'scale', 'interact']
 
-// Switch mode. Selecting a tool makes it current (and remembered); the Select
-// button toggles select on/off, returning to the last tool when toggled off.
+// Switch mode. Selecting a tool makes it current (and remembered as the last non-select tool); the
+// Select button toggles select on/off, returning to the last tool. Interact can't be entered while
+// the scene is paused.
 export function setActiveAction(action: string): void {
   if (action === 'select') {
     state.activeAction = state.activeAction === 'select' ? state.lastTool : 'select'
     return
   }
-  if (TOOLS.includes(action)) state.lastTool = action as 'translate' | 'rotate' | 'scale'
+  if (action === 'interact' && state.frozen) return
+  if (NON_SELECT_TOOLS.includes(action)) state.lastTool = action as typeof state.lastTool
   state.activeAction = action
+}
+
+// The real mode right now, derived from the chosen tool + selection + pause:
+//  - a transform tool with no selection falls back to 'interact' (nothing to act on) WITHOUT
+//    changing the stored choice; 'select' never falls back (you need it to build a selection).
+//  - 'interact' (explicit or fallback) needs a running scene — paused returns null (no mode).
+export function effectiveMode(): string | null {
+  const a = state.activeAction
+  const hasSel = state.selected.size > 0
+  const wantsInteract = a === 'interact' || (!hasSel && TRANSFORM_TOOLS.includes(a))
+  if (wantsInteract) return state.frozen ? null : 'interact'
+  return a
 }
 
 const NODE_DISPLAY_ORDER = ['always', 'selected', 'selecting'] as const
