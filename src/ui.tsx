@@ -1763,9 +1763,7 @@ function parentDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={() => {
-          state.parentConfirm = false
-        }}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 440, flexDirection: 'column', padding: 16 }}
@@ -1890,7 +1888,7 @@ function newEntityDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={close}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 420, height: 150, flexDirection: 'column', padding: 16 }}
@@ -1993,7 +1991,7 @@ function assetPickerDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={close}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 480, height: 460, flexDirection: 'column', padding: 16 }}
@@ -2130,7 +2128,7 @@ function contentViewerDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={close}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 560, height: 460, flexDirection: 'column', padding: 16 }}
@@ -2266,7 +2264,7 @@ function filePickerDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={close}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 560, height: 460, flexDirection: 'column', padding: 16 }}
@@ -2407,9 +2405,7 @@ function deleteDialog(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={() => {
-          state.deleteConfirm = null
-        }}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 420, flexDirection: 'column', padding: 16 }}
@@ -2612,9 +2608,7 @@ function saveDialogUi(): ReactEcs.JSX.Element | null {
           position: { top: 0, left: 0 }
         }}
         uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
-        onMouseDown={() => {
-          cancelSaveDialog()
-        }}
+        onMouseDown={() => {}}
       />
       <UiEntity
         uiTransform={{ width: 720, height: 520, flexDirection: 'column', padding: 16 }}
