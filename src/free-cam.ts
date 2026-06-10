@@ -112,8 +112,22 @@ function setCamMode(mode: 'none' | 'free' | 'target'): void {
     }
     t.rotation = lookRotation()
     MainCamera.createOrReplace(engine.CameraEntity, { virtualCameraEntity: camEntity })
+    // Pin the avatar's locomotion so WASD drives the camera, not the player — but disable each
+    // movement granularly rather than `disableAll`, which also sets `block_emote` and so filters
+    // the Emote system action (B) out of the super-user stream, breaking the B = cycle-cam hotkey
+    // once we're in cam mode. Leaving emote enabled keeps that key flowing.
     InputModifier.createOrReplace(engine.PlayerEntity, {
-      mode: { $case: 'standard', standard: { disableAll: true } }
+      mode: {
+        $case: 'standard',
+        standard: {
+          disableWalk: true,
+          disableJog: true,
+          disableRun: true,
+          disableJump: true,
+          disableDoubleJump: true,
+          disableGliding: true
+        }
+      }
     })
   }
   if (wasCam && !isCam) {
