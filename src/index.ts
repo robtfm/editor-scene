@@ -7,6 +7,7 @@ import { setupRelations } from './relations'
 import { setupCamera } from './free-cam'
 import { startSelectBox } from './overlay'
 import { startSystemActions } from './system-actions'
+import { startHighlightSync } from './highlight'
 
 export function main(): void {
   const _log = console.log
@@ -20,6 +21,7 @@ export function main(): void {
   setupCamera()
   startSelectBox()
   startSystemActions()
+  startHighlightSync()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {
