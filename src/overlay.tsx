@@ -3,6 +3,7 @@ import { engine, inputSystem, InputAction, PrimaryPointerInfo } from '@dcl/sdk/e
 import { Color4 } from '@dcl/sdk/math'
 import {
   state,
+  effectiveMode,
   selectEntityInTree,
   selectionClick,
   applyBoxSelection,
@@ -225,7 +226,7 @@ export function overlayUi(): ReactEcs.JSX.Element | null {
 
   // Select mode shows all nodes interactively; outside it, the node-display
   // setting governs whether markers appear (all / only selected / none).
-  const selecting = state.activeAction === 'select'
+  const selecting = effectiveMode() === 'select'
   const showAll = selecting || state.nodeDisplay === 'always'
   const showSelected = state.nodeDisplay === 'selected'
   if (!showAll && !showSelected) return null

@@ -1530,7 +1530,10 @@ function toggleChip(
 // - Translate: axis orientation (the active entity's local axes vs world axes).
 // - Rotate/Scale (with >1 selected): pivot (active entity vs each item's origin).
 function modeToggle(): ReactEcs.JSX.Element | [] {
-  if (state.activeAction === 'translate' && state.activeEntity !== null) {
+  // Gate on the effective mode, not the stored tool — a transform tool forced to interact
+  // (no transformable active) shouldn't show its orient/pivot toggle.
+  const mode = effectiveMode()
+  if (mode === 'translate') {
     return toggleChip(
       'orient-toggle',
       state.orientGlobal ? 'Orient: Global' : 'Orient: Local',
@@ -1539,10 +1542,7 @@ function modeToggle(): ReactEcs.JSX.Element | [] {
       }
     )
   }
-  if (
-    (state.activeAction === 'rotate' || state.activeAction === 'scale') &&
-    state.selected.size > 1
-  ) {
+  if ((mode === 'rotate' || mode === 'scale') && state.selected.size > 1) {
     return toggleChip(
       'pivot-toggle',
       state.pivotEach ? 'Pivot: Each' : 'Pivot: Active',
