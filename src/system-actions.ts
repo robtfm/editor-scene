@@ -1,6 +1,33 @@
 import { engine, PointerLock, PrimaryPointerInfo } from '@dcl/sdk/ecs'
 import { BevyApi } from './bevy-api'
-import { setActiveAction } from './state'
+import { state, setActiveAction, clearSelection } from './state'
+import { cancelSaveDialog } from './inspector'
+
+// Close the topmost open popup, one layer per call (so Escape unwinds nested modals — e.g. the file
+// picker over the component window). Returns true if something was closed.
+function closeTopModal(): boolean {
+  if (state.filePicker !== null) {
+    state.filePicker = null
+  } else if (state.assetPickerOpen) {
+    state.assetPickerOpen = false
+  } else if (state.contentViewerOpen) {
+    state.contentViewerOpen = false
+  } else if (state.newEntityOpen) {
+    state.newEntityOpen = false
+    state.newEntityName = ''
+  } else if (state.parentConfirm) {
+    state.parentConfirm = false
+  } else if (state.deleteConfirm !== null) {
+    state.deleteConfirm = null
+  } else if (state.saveDialog !== null) {
+    cancelSaveDialog()
+  } else if (state.componentWindow !== null) {
+    state.componentWindow = null
+  } else {
+    return false
+  }
+  return true
+}
 
 // Right-click maps to the CameraLock system action — observable only by
 // super-user scenes via the system action stream (a normal scene can't see it).
@@ -43,6 +70,11 @@ export function startSystemActions(): void {
 async function listen(): Promise<void> {
   const stream = await BevyApi.getSystemActionStream()
   for await (const ev of stream) {
+    // Escape / gamepad-Select → close the topmost open popup, or clear the selection if none open.
+    if (ev.action === 'Cancel') {
+      if (ev.pressed && !closeTopModal()) clearSelection()
+      continue
+    }
     if (ev.action !== 'CameraLock') continue
     if (ev.pressed) {
       held = true
