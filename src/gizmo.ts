@@ -12,7 +12,7 @@ import {
   type Entity
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
-import { state, topLevelSelected, parentOf } from './state'
+import { state, topLevelSelected, parentOf, effectiveMode } from './state'
 import {
   worldTransformOf,
   worldToLocalPosition,
@@ -70,18 +70,16 @@ export function gizmoCameraEntity(): Entity | null {
   return gizmoCamera
 }
 
-// Which transform mode the gizmo is in (translate/rotate), or null when no
-// transform action is active or nothing is selected.
-function activeMode(): Mode | null {
-  if (state.activeEntity === null) return null
-  if (state.activeAction === 'translate') return 'translate'
-  if (state.activeAction === 'rotate') return 'rotate'
-  if (state.activeAction === 'scale') return 'scale'
-  return null
+// Which transform mode the gizmo is in, or null when the effective mode isn't a transform tool.
+// effectiveMode() is the single source of truth — it already accounts for selection, pause, and
+// reserved (<512, non-transformable) active entities.
+function gizmoMode(): Mode | null {
+  const m = effectiveMode()
+  return m === 'translate' || m === 'rotate' || m === 'scale' ? m : null
 }
 
-function gizmoActive(): boolean {
-  return activeMode() !== null
+export function gizmoActive(): boolean {
+  return gizmoMode() !== null
 }
 
 // --- materials ---
@@ -306,11 +304,33 @@ function textureSize(w: number, h: number): { width: number; height: number } {
   return { width: clamp(w), height: clamp(h) }
 }
 
+// The gizmo texture is created once at the initial canvas size; on resize its aspect no longer
+// matches the screen and the gizmo (composited full-screen) misprojects against the world. Re-sync
+// the texture resolution to the canvas whenever it changes.
+let lastCanvasW = 0
+let lastCanvasH = 0
+function syncCanvasSize(): void {
+  if (gizmoCamera === null) return
+  const canvas = UiCanvasInformation.getOrNull(engine.RootEntity)
+  if (canvas === null || canvas.width <= 0 || canvas.height <= 0) return
+  if (canvas.width === lastCanvasW && canvas.height === lastCanvasH) return
+  lastCanvasW = canvas.width
+  lastCanvasH = canvas.height
+  const size = textureSize(canvas.width, canvas.height)
+  const tc = TextureCamera.getMutableOrNull(gizmoCamera)
+  if (tc !== null) {
+    tc.width = size.width
+    tc.height = size.height
+  }
+}
+
 export function setupGizmo(): void {
   if (gizmoCamera !== null) return
 
   const canvas = UiCanvasInformation.getOrNull(engine.RootEntity)
   const size = textureSize(canvas?.width ?? 1280, canvas?.height ?? 720)
+  lastCanvasW = canvas?.width ?? 0
+  lastCanvasH = canvas?.height ?? 0
   const cam = engine.addEntity()
   Transform.create(cam)
   TextureCamera.create(cam, {
@@ -371,7 +391,8 @@ export function setupGizmo(): void {
 }
 
 // Show the handle group for `mode`, hide the others (only on change).
-function showGroup(mode: Mode): void {
+// `null` hides every handle group (gizmo inactive); a mode shows that group, hides the others.
+function showGroup(mode: Mode | null): void {
   if (mode === lastMode || translateGroup === null || rotateGroup === null || scaleGroup === null) {
     return
   }
@@ -958,9 +979,17 @@ function quatClose(a: Quaternion, b: Quaternion): boolean {
 
 function updateGizmo(dt: number): void {
   if (gizmoCamera === null || gizmoRoot === null) return
+  syncCanvasSize()
   const dragging = drag !== null
-  if (!dragging && (!gizmoActive() || state.activeEntity === null)) {
+  const gizmoOn = dragging || gizmoActive()
+  // The gizmo's TextureCamera is shared with the relation lines, so mirror it whenever either is
+  // shown — not every frame, to avoid camera churn while nothing's selected.
+  const linesOn = state.showLinks && state.selected.size > 0
+  const camT = Transform.getOrNull(engine.CameraEntity)
+  if ((gizmoOn || linesOn) && camT !== null) mirrorCamera(camT)
+  if (!gizmoOn) {
     if (state.gizmoHover !== null) state.gizmoHover = null
+    showGroup(null) // hide the handles — the shared overlay texture now shows only the lines
     applyHighlight(null)
     pendingWorld = null
     pendingRot = null
@@ -970,9 +999,7 @@ function updateGizmo(dt: number): void {
     return
   }
 
-  const camT = Transform.getOrNull(engine.CameraEntity)
   if (camT === null) return
-  mirrorCamera(camT)
 
   const mode: Mode = dragging
     ? (drag as DragState).kind === 'rotate'
@@ -980,7 +1007,7 @@ function updateGizmo(dt: number): void {
       : (drag as DragState).kind.startsWith('scale')
         ? 'scale'
         : 'translate'
-    : (activeMode() as Mode)
+    : (gizmoMode() as Mode)
   showGroup(mode)
 
   if (dragging) {

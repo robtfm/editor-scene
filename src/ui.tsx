@@ -25,8 +25,7 @@ import {
 import { overlayUi } from './overlay'
 import { isWorldScaleNonUniform } from './world-pos'
 import { cycleCamMode, orientToAxis } from './free-cam'
-import { gizmoCameraEntity, startGizmoDrag, endGizmoDrag } from './gizmo'
-import { relationsCameraEntity } from './relations'
+import { gizmoCameraEntity, gizmoActive, startGizmoDrag, endGizmoDrag } from './gizmo'
 import {
   refresh,
   setComponentValue,
@@ -1458,46 +1457,21 @@ const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'interact', label: 'Interact' }
 ]
 
-// Fullscreen panel showing the gizmo camera's render (composited on top of the
-// world). Pointer-transparent for now; the drag handler comes with interaction.
-// Fullscreen pass-through panel showing the relations camera (parent/child
-// links for the current selection), composited under the gizmo and markers.
-function relationsPanel(): ReactEcs.JSX.Element | null {
-  if (state.selected.size === 0) return null
-  const cam = relationsCameraEntity()
-  if (cam === null) return null
-  return (
-    <UiEntity
-      uiTransform={{
-        width: '100%',
-        height: '100%',
-        positionType: 'absolute',
-        position: { top: 0, left: 0 },
-        pointerFilter: 'none'
-      }}
-      uiBackground={{ textureMode: 'stretch', videoTexture: { videoPlayerEntity: cam } }}
-    />
-  )
-}
-
-function gizmoPanel(): ReactEcs.JSX.Element | null {
-  const mode = state.activeAction
-  if (
-    (mode !== 'translate' && mode !== 'rotate' && mode !== 'scale') ||
-    state.activeEntity === null
-  ) {
-    return null
-  }
+// One fullscreen panel compositing the shared overlay TextureCamera (gizmo handles + parent/child
+// relation lines, both on GIZMO_LAYER) over the world. Shown whenever either is active; captures the
+// pointer only for an active gizmo handle, so clicks otherwise pass through to the world/scene.
+function overlayPanel(): ReactEcs.JSX.Element | null {
   const cam = gizmoCameraEntity()
   if (cam === null) return null
-  // Capture the pointer only when a handle is hovered or a drag is in progress,
-  // so clicks pass through to the world otherwise.
-  const capture = state.gizmoHover !== null || state.gizmoDragging
-  // For scale handles, registering onMouseDragLocked makes the engine pointer-
-  // lock for the drag (the cursor stays put); scale reads screenDelta, which
-  // keeps flowing while locked. Translate/rotate must NOT lock — they track the
-  // absolute world ray, which pins to screen-centre under lock.
-  const lockScale = state.gizmoHover !== null && state.gizmoHover[0] === 's'
+  const gizmoOn = gizmoActive()
+  const linesOn = state.showLinks && state.selected.size > 0
+  if (!gizmoOn && !linesOn) return null
+  // Capture the pointer only when a gizmo handle is hovered or a drag is in progress.
+  const capture = gizmoOn && (state.gizmoHover !== null || state.gizmoDragging)
+  // For scale handles, registering onMouseDragLocked makes the engine pointer-lock for the drag (the
+  // cursor stays put); scale reads screenDelta, which keeps flowing while locked. Translate/rotate
+  // must NOT lock — they track the absolute world ray, which pins to screen-centre under lock.
+  const lockScale = gizmoOn && state.gizmoHover !== null && state.gizmoHover[0] === 's'
   return (
     <UiEntity
       uiTransform={{
@@ -1511,12 +1485,20 @@ function gizmoPanel(): ReactEcs.JSX.Element | null {
         textureMode: 'stretch',
         videoTexture: { videoPlayerEntity: cam }
       }}
-      onMouseDown={() => {
-        startGizmoDrag()
-      }}
-      onMouseUp={() => {
-        endGizmoDrag()
-      }}
+      onMouseDown={
+        gizmoOn
+          ? () => {
+              startGizmoDrag()
+            }
+          : undefined
+      }
+      onMouseUp={
+        gizmoOn
+          ? () => {
+              endGizmoDrag()
+            }
+          : undefined
+      }
       onMouseDragLocked={lockScale ? () => {} : undefined}
     />
   )
@@ -2973,9 +2955,11 @@ export function inspectorUi(): ReactEcs.JSX.Element {
         pointerFilter: 'none'
       }}
     >
-      {relationsPanel() ?? []}
+      {/* Lines composite *under* the markers/box-select (so selection works); the gizmo composites
+          *over* them (so its handles capture). Same texture, placed by mode. */}
+      {!gizmoActive() ? (overlayPanel() ?? []) : []}
       {overlayUi() ?? []}
-      {gizmoPanel() ?? []}
+      {gizmoActive() ? (overlayPanel() ?? []) : []}
       {controlPanel()}
       <UiEntity
         uiTransform={{

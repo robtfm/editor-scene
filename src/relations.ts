@@ -4,72 +4,31 @@ import {
   MeshRenderer,
   Material,
   VisibilityComponent,
-  TextureCamera,
-  CameraLayer,
   CameraLayers,
-  UiCanvasInformation,
   type Entity
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
 import { state, parentOf, buildForest } from './state'
 import { computeWorldPositions } from './world-pos'
-import { cameraFovY } from './camera-projection'
-import { liveWorldPos } from './gizmo'
+import { liveWorldPos, GIZMO_LAYER } from './gizmo'
 
-// A render layer drawn only by the relations camera, composited over the world
-// (and under the gizmo) to draw parent/child links for the current selection.
-export const RELATION_LAYER = 5
-
+// Parent/child link lines for the current selection, drawn on the shared overlay layer (rendered by
+// the gizmo's TextureCamera and composited over the world). No separate camera — see gizmo.ts.
 const TO_PARENT = Color4.create(0.2, 0.4, 1, 1) // blue
 const TO_CHILD = Color4.create(0.7, 0.95, 0.15, 1) // lime
 const BOTH = Color4.create(0.2, 0.85, 0.9, 1) // cyan
 const MAX_LINES = 192
 
-let relCamera: Entity | null = null
 let relRoot: Entity | null = null
 const lines: Entity[] = []
 const lineShown: boolean[] = []
 
-export function relationsCameraEntity(): Entity | null {
-  return relCamera
-}
-
-function textureSize(w: number, h: number): { width: number; height: number } {
-  const scale = Math.min(1, 1600 / Math.max(w, h))
-  const clamp = (n: number): number =>
-    Math.max(16, Math.min(2048, Math.round(n * scale)))
-  return { width: clamp(w), height: clamp(h) }
-}
-
 export function setupRelations(): void {
-  if (relCamera !== null) return
-
-  const canvas = UiCanvasInformation.getOrNull(engine.RootEntity)
-  const size = textureSize(canvas?.width ?? 1280, canvas?.height ?? 720)
-  const cam = engine.addEntity()
-  Transform.create(cam)
-  TextureCamera.create(cam, {
-    width: size.width,
-    height: size.height,
-    layer: RELATION_LAYER,
-    clearColor: Color4.create(0, 0, 0, 0),
-    mode: {
-      $case: 'perspective',
-      perspective: { fieldOfView: cameraFovY() ?? Math.PI / 4 }
-    }
-  })
-  CameraLayer.create(cam, {
-    layer: RELATION_LAYER,
-    directionalLight: false,
-    showAvatars: false,
-    showSkybox: false,
-    showFog: false
-  })
-  relCamera = cam
+  if (relRoot !== null) return
 
   const root = engine.addEntity()
   Transform.create(root)
-  CameraLayers.create(root, { layers: [RELATION_LAYER] })
+  CameraLayers.create(root, { layers: [GIZMO_LAYER] })
   for (let i = 0; i < MAX_LINES; i++) {
     const e = engine.addEntity()
     Transform.create(e, { parent: root })
@@ -81,18 +40,6 @@ export function setupRelations(): void {
   relRoot = root
 
   engine.addSystem(updateRelations)
-}
-
-function mirrorCamera(camT: { position: Vector3; rotation: Quaternion }): void {
-  if (relCamera === null) return
-  const g = Transform.getMutable(relCamera)
-  g.position = { ...camT.position }
-  g.rotation = { ...camT.rotation }
-  const fov = cameraFovY()
-  if (fov !== null) {
-    const tc = TextureCamera.getMutable(relCamera)
-    if (tc.mode?.$case === 'perspective') tc.mode.perspective.fieldOfView = fov
-  }
 }
 
 // The colour + alpha for an edge from parent P to child C. The active endpoint's
@@ -139,7 +86,7 @@ function showLine(i: number, on: boolean): void {
 }
 
 function updateRelations(): void {
-  if (relCamera === null || relRoot === null) return
+  if (relRoot === null) return
 
   if (!state.showLinks || state.selected.size === 0) {
     for (let i = 0; i < lines.length; i++) showLine(i, false)
@@ -148,7 +95,6 @@ function updateRelations(): void {
 
   const camT = Transform.getOrNull(engine.CameraEntity)
   if (camT === null) return
-  mirrorCamera(camT)
 
   const world = computeWorldPositions(state.snapshot)
   if (world === null) return

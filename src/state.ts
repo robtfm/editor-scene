@@ -224,13 +224,14 @@ export function setActiveAction(action: string): void {
 }
 
 // The real mode right now, derived from the chosen tool + selection + pause:
-//  - a transform tool with no selection falls back to 'interact' (nothing to act on) WITHOUT
-//    changing the stored choice; 'select' never falls back (you need it to build a selection).
+//  - a transform tool falls back to 'interact' when there's nothing it can act on — no selection, or
+//    a reserved (<512, non-transformable) active entity — WITHOUT changing the stored choice;
+//    'select' never falls back (you need it to build a selection).
 //  - 'interact' (explicit or fallback) needs a running scene — paused returns null (no mode).
 export function effectiveMode(): string | null {
   const a = state.activeAction
-  const hasSel = state.selected.size > 0
-  const wantsInteract = a === 'interact' || (!hasSel && TRANSFORM_TOOLS.includes(a))
+  const canTransform = state.activeEntity !== null && Number(state.activeEntity) >= 512
+  const wantsInteract = a === 'interact' || (!canTransform && TRANSFORM_TOOLS.includes(a))
   if (wantsInteract) return state.frozen ? null : 'interact'
   return a
 }
