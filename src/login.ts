@@ -9,9 +9,11 @@ export async function autoLogin(): Promise<void> {
 
   if (previous?.userId !== null && previous?.userId !== undefined) {
     console.log('found previous login', previous.userId, '- logging in')
-    const result = await BevyApi.loginPrevious()
-    if (!result.success) {
-      console.error('loginPrevious failed, falling back to guest:', result.error)
+    // loginPrevious resolves on success and throws on failure (the host op returns void).
+    try {
+      await BevyApi.loginPrevious()
+    } catch (e) {
+      console.error('loginPrevious failed, falling back to guest:', e)
       BevyApi.loginGuest()
     }
   } else {

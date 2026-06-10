@@ -15,7 +15,8 @@ export type LiveSceneInfo = {
 // The subset of the explorer's `~system/BevyExplorerApi` surface this scene uses.
 export type BevyApiInterface = {
   getPreviousLogin: () => Promise<{ userId: string | null }>
-  loginPrevious: () => Promise<{ success: boolean; error: string }>
+  // resolves on success, rejects on failure (the host op returns void)
+  loginPrevious: () => Promise<void>
   loginGuest: () => void
 
   liveSceneInfo: () => Promise<LiveSceneInfo[]>
