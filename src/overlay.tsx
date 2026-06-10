@@ -11,7 +11,10 @@ import {
 import { computeWorldPositions, shouldMark } from './world-pos'
 import { projectWorldToScreen } from './camera-projection'
 import { liveWorldPos } from './gizmo'
+import { requestMeshPick } from './mesh-select'
 
+// Below this much pointer travel (px) a press+release counts as a click (mesh-pick), not a drag-box.
+const CLICK_THRESHOLD = 4
 const CIRCLE_D = 16
 const MARKER = Color4.create(0.4, 0.85, 1, 1)
 const MARKER_HOVER = Color4.create(1, 0.85, 0.3, 1)
@@ -42,6 +45,13 @@ function pointerXY(): { x: number; y: number } | null {
 function finishBox(): void {
   const box = state.selectBox
   if (box === null) return
+  state.selectBox = null
+  // A click on empty space (no drag) -> mesh-pick the entity under the cursor instead of an empty
+  // box-select. (Clicks on a marker are handled by the marker itself, which sits on top.)
+  if (Math.abs(box.curX - box.startX) + Math.abs(box.curY - box.startY) < CLICK_THRESHOLD) {
+    requestMeshPick(box.add, box.remove)
+    return
+  }
   const minX = Math.min(box.startX, box.curX)
   const maxX = Math.max(box.startX, box.curX)
   const minY = Math.min(box.startY, box.curY)
@@ -51,7 +61,6 @@ function finishBox(): void {
     if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) ids.push(id)
   }
   applyBoxSelection(ids, box.add, box.remove)
-  state.selectBox = null
 }
 
 // Drive the drag-box from the live pointer-pressed state rather than UI up/drag

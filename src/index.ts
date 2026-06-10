@@ -8,6 +8,7 @@ import { setupCamera } from './free-cam'
 import { startSelectBox } from './overlay'
 import { startSystemActions } from './system-actions'
 import { startHighlightSync } from './highlight'
+import { setupMeshSelect } from './mesh-select'
 
 export function main(): void {
   const _log = console.log
@@ -22,6 +23,7 @@ export function main(): void {
   startSelectBox()
   startSystemActions()
   startHighlightSync()
+  setupMeshSelect()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {
