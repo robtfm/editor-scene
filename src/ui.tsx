@@ -50,6 +50,7 @@ import {
 } from './inspector'
 import { optionForSource, type DiffRow, type DiffSource } from './save-diff'
 import { fetchCatalog, importAsset, fetchSceneContent } from './import'
+import { visibilityMode, cycleVisibilityOverlay } from './overlay-actions'
 import {
   isColor,
   isVector,
@@ -207,6 +208,29 @@ function deleteButton(entityId: string): ReactEcs.JSX.Element {
       }}
       onMouseDown={() => {
         onDeleteClick(entityId)
+      }}
+    />
+  )
+}
+
+// Editor visibility overlay toggle: cycles '=' (scene) -> '+' (force visible) -> '-' (force
+// invisible) over the entity + its subtree. Engine-only — reverted for display/save (overlays).
+function visibilityButton(entityId: string): ReactEcs.JSX.Element {
+  const mode = visibilityMode(entityId)
+  const color = mode === '+' ? TOGGLE_ON : mode === '-' ? DANGER : REVERT_BG
+  return (
+    <UiEntity
+      uiTransform={{
+        width: 18,
+        height: 20,
+        margin: { right: 4 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color }}
+      uiText={{ value: mode, fontSize: FS, color: mode === '=' ? MUTED : TEXT }}
+      onMouseDown={() => {
+        cycleVisibilityOverlay(entityId)
       }}
     />
   )
@@ -1326,6 +1350,7 @@ function entityNode(
           />
         </UiEntity>
         {componentsBadge(entityId, compCount)}
+        {Number(entityId) >= 512 ? visibilityButton(entityId) : []}
         {Number(entityId) >= 512 ? deleteButton(entityId) : []}
       </UiEntity>
       {expanded && (
