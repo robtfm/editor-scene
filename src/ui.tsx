@@ -1045,6 +1045,30 @@ function renderSchemaNode(
 // Editor body for one component: toolbar (Apply / Revert / Raw-Fields / status)
 // plus either the structured editor or the raw-JSON input. Read-only (engine-managed) components
 // get no toolbar and a disabled pretty-JSON view instead.
+function schemaLoadingPlaceholder(key: string): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={`${key}/loading`}
+      uiTransform={{ width: '100%', height: 22, alignItems: 'center', padding: { left: 4 } }}
+      uiText={{ value: 'loading schema…', fontSize: FS - 2, color: MUTED, textAlign: 'middle-left' }}
+    />
+  )
+}
+
+// The typed schema for a component (lazily fetched) and whether it's still loading — a known
+// (non-custom) component whose fetch is in flight. We show a placeholder while loading rather than
+// the value-shape fallback, which is snapshot-ordered and omits unset fields (so it looks "out of
+// order, half missing" on the first frame before the schema lands).
+function componentSchema(
+  name: string,
+  raw: boolean
+): { schema: ComponentSchema | undefined; loading: boolean } {
+  if (raw || isCustomComponent(name)) return { schema: undefined, loading: false }
+  ensureSchema(name)
+  const schema = getSchema(name)
+  return { schema, loading: schema === undefined && state.schemaPending.has(name) }
+}
+
 function valueRow(
   entityId: string,
   name: string,
@@ -1056,13 +1080,14 @@ function valueRow(
   if (readOnly) {
     // Same structured editor as a writable component, but no toolbar and every widget disabled
     // (see `fieldsDisabled`). Falls back to the generic field renderer when no schema is available.
-    ensureSchema(name)
-    const schema = getSchema(name)
+    const { schema, loading } = componentSchema(name, false)
     fieldsDisabled = true
     const body =
       schema !== undefined
         ? renderSchemaNode(schema, key, schema.root, '', value)
-        : renderField(key, '', '', value)
+        : loading
+          ? schemaLoadingPlaceholder(key)
+          : renderField(key, '', '', value)
     fieldsDisabled = false
     return (
       <UiEntity
@@ -1077,8 +1102,7 @@ function valueRow(
   const raw = state.rawMode.has(key)
   const status = state.editStatus.get(key) ?? ''
   // Pull the typed schema (lazily fetched); when present it drives the field editor.
-  ensureSchema(name)
-  const schema = state.rawMode.has(key) ? undefined : getSchema(name)
+  const { schema, loading } = componentSchema(name, raw)
 
   return (
     <UiEntity
@@ -1138,7 +1162,9 @@ function valueRow(
         ? rawEditor(key, entityId, name, value)
         : schema !== undefined
           ? renderSchemaNode(schema, key, schema.root, '', value)
-          : renderField(key, '', '', value)}
+          : loading
+            ? schemaLoadingPlaceholder(key)
+            : renderField(key, '', '', value)}
     </UiEntity>
   )
 }

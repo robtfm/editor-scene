@@ -37,7 +37,13 @@ import {
   type DiffRow,
   type DiffSource
 } from './save-diff'
-import { getSchema, captureTransformDefaults, loadSchema, toSdkValue } from './schema'
+import {
+  getSchema,
+  captureTransformDefaults,
+  loadSchema,
+  toSdkValue,
+  preloadSchemas
+} from './schema'
 import { localRelativeTo } from './world-pos'
 import { sleep } from './utils'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
@@ -136,6 +142,8 @@ export async function reloadSnapshot(): Promise<void> {
     // true scene state (overlays are engine-only; see overlay-actions.ts).
     state.snapshot = logicalSnapshot(raw)
     state.status = 'ready'
+    // warm component schemas now so the first expand of any component is already typed
+    preloadSchemas(state.snapshot)
     primeScroll()
   } catch (e) {
     state.error = String(e)

@@ -1,7 +1,8 @@
 import { BevyApi } from './bevy-api'
-import { state, type ComponentKey } from './state'
+import { state, type ComponentKey, type Snapshot } from './state'
 import { fieldKey, currentNumber, setFieldProgrammatic, joinPath } from './fields'
 import { applyCurated, TRANSFORM_SCHEMA } from './curated'
+import { isCustomComponent } from './custom-components'
 
 // channel layouts for the composite leaves, edited via per-channel widgets
 const CHANNELS: Record<string, string[]> = {
@@ -205,6 +206,20 @@ export function toSdkValue(value: unknown, node: SchemaNode): unknown {
 }
 
 // Fetch (once) the schema for a component, caching it. Best-effort.
+// Warm the schema cache for every (non-custom) component present in the snapshot, so the first time
+// a component is expanded its typed schema is already loaded (no value-shape flash). Idempotent —
+// ensureSchema skips anything already cached or in flight, so re-running it each reload is cheap.
+export function preloadSchemas(snapshot: Snapshot): void {
+  const seen = new Set<string>()
+  for (const comps of Object.values(snapshot)) {
+    for (const name of Object.keys(comps)) {
+      if (seen.has(name)) continue
+      seen.add(name)
+      if (!isCustomComponent(name)) ensureSchema(name)
+    }
+  }
+}
+
 export function ensureSchema(name: string): void {
   if (state.schemas.has(name) || state.schemaPending.has(name)) return
   if (name === 'Transform') {
