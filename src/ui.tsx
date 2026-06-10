@@ -9,6 +9,8 @@ import {
   clearComponentEdits,
   setActiveAction,
   effectiveMode,
+  canTransform,
+  TRANSFORM_TOOLS,
   cycleNodeDisplay,
   selectionClick,
   rowElementId,
@@ -1845,9 +1847,12 @@ function actionButton(action: {
   label: string
 }): ReactEcs.JSX.Element {
   // highlight the *effective* mode (so Interact lights up when it's the empty-selection fallback);
-  // Interact is disabled while the scene is paused.
+  // Interact is disabled while the scene is paused, and the transform tools while there's no
+  // transformable (non-reserved) active entity to act on.
   const active = effectiveMode() === action.id
-  const disabled = action.id === 'interact' && state.frozen
+  const disabled =
+    (action.id === 'interact' && state.frozen) ||
+    (TRANSFORM_TOOLS.includes(action.id) && !canTransform())
   return (
     <UiEntity
       key={`action-${action.id}`}

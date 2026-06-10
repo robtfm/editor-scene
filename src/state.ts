@@ -207,8 +207,14 @@ export function rowElementId(id: string): string {
   return `row-${id}`
 }
 
-const TRANSFORM_TOOLS = ['translate', 'rotate', 'scale']
+export const TRANSFORM_TOOLS = ['translate', 'rotate', 'scale']
 const NON_SELECT_TOOLS = ['translate', 'rotate', 'scale', 'interact']
+
+// True when there's something the transform tools can act on: a non-reserved (>=512) active entity.
+// Reserved entities (root/player/camera) aren't transformable, so the transform tools are disabled.
+export function canTransform(): boolean {
+  return state.activeEntity !== null && Number(state.activeEntity) >= 512
+}
 
 // Switch mode. Selecting a tool makes it current (and remembered as the last non-select tool); the
 // Select button toggles select on/off, returning to the last tool. Interact can't be entered while
@@ -230,8 +236,7 @@ export function setActiveAction(action: string): void {
 //  - 'interact' (explicit or fallback) needs a running scene — paused returns null (no mode).
 export function effectiveMode(): string | null {
   const a = state.activeAction
-  const canTransform = state.activeEntity !== null && Number(state.activeEntity) >= 512
-  const wantsInteract = a === 'interact' || (!canTransform && TRANSFORM_TOOLS.includes(a))
+  const wantsInteract = a === 'interact' || (!canTransform() && TRANSFORM_TOOLS.includes(a))
   if (wantsInteract) return state.frozen ? null : 'interact'
   return a
 }
