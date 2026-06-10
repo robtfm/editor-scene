@@ -85,6 +85,13 @@ export const state = {
   }>,
   assetFilter: '',
   assetBusy: false,
+  // scene-content viewer: whether it's open, the file list (from /scene_content), a search
+  // filter, and whether a fetch is in flight. Lets us eyeball the scene's content map (incl.
+  // imported assets + files added to the project outside the editor).
+  contentViewerOpen: false,
+  contentFiles: [] as string[],
+  contentFilter: '',
+  contentBusy: false,
   // catalog of editable component names (from /component_names), for the picker
   componentNames: [] as string[],
   // per-component typed schema (from /component_schema), keyed by component name

@@ -49,7 +49,7 @@ import {
   cancelSaveDialog
 } from './inspector'
 import { optionForSource, type DiffRow, type DiffSource } from './save-diff'
-import { fetchCatalog, importAsset } from './import'
+import { fetchCatalog, importAsset, fetchSceneContent } from './import'
 import {
   isColor,
   isVector,
@@ -2013,6 +2013,123 @@ function assetPickerDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Kick off a /scene_content fetch into state (the engine refreshes from the dev server first, so
+// files added to the project outside the editor are picked up). Guarded against re-entrancy.
+function loadSceneContent(): void {
+  if (state.contentBusy) return
+  state.contentBusy = true
+  fetchSceneContent()
+    .then((files) => {
+      state.contentFiles = files
+    })
+    .catch(console.error)
+    .then(() => {
+      state.contentBusy = false
+    })
+}
+
+// Modal: read-only viewer of the scene's content map (from /scene_content) — a simple list with a
+// filter and a Refresh button, to eyeball imported assets + externally-added files.
+function contentViewerDialog(): ReactEcs.JSX.Element | null {
+  if (!state.contentViewerOpen) return null
+  const close = (): void => {
+    state.contentViewerOpen = false
+  }
+  const filter = state.contentFilter.trim().toLowerCase()
+  const matches = state.contentFiles.filter((f) => filter === '' || f.includes(filter))
+  const shown = matches.slice(0, 500)
+  const status = state.contentBusy
+    ? 'loading…'
+    : `${matches.length} file${matches.length === 1 ? '' : 's'}${
+        matches.length > shown.length ? ` (showing ${shown.length})` : ''
+      }`
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={close}
+      />
+      <UiEntity
+        uiTransform={{ width: 560, height: 460, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 8 } }}
+          uiText={{ value: 'Scene Content', fontSize: FS + 2, color: TEXT, textAlign: 'middle-left' }}
+        />
+        <Input
+          key="content-filter"
+          uiTransform={{
+            elementId: 'content-filter',
+            width: '100%',
+            height: 28,
+            margin: { bottom: 8 },
+            padding: { left: 4, right: 4 }
+          }}
+          uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+          value={state.contentFilter}
+          placeholder="filter path"
+          fontSize={FS - 1}
+          color={TEXT}
+          textAlign="middle-left"
+          onChange={(v) => {
+            state.contentFilter = v
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 18, margin: { bottom: 4 } }}
+          uiText={{ value: status, fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 320,
+            flexDirection: 'column',
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
+          }}
+        >
+          {shown.map((f, i) => (
+            <UiEntity
+              key={`${i}-${f}`}
+              uiTransform={{
+                width: '100%',
+                height: 22,
+                alignItems: 'center',
+                padding: { left: 4, right: 6 },
+                margin: { bottom: 1 }
+              }}
+              uiBackground={{ color: i % 2 === 0 ? PANEL_BG : BUTTON_BG }}
+              uiText={{ value: f, fontSize: FS - 3, color: TEXT, textAlign: 'middle-left' }}
+            />
+          ))}
+        </UiEntity>
+        <UiEntity
+          uiTransform={{ width: '100%', height: 28, flexDirection: 'row', margin: { top: 8 } }}
+        >
+          {dialogButton('Refresh', 90, BUTTON_BG, loadSceneContent)}
+          {dialogButton('Close', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Modal delete-confirm: backdrop (click to cancel) + a centred box showing the
 // entity, its direct children, and the available delete modes.
 function deleteDialog(): ReactEcs.JSX.Element | null {
@@ -2715,6 +2832,26 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               : undefined
           }
         />
+        <UiEntity
+          uiTransform={{
+            width: 90,
+            height: 22,
+            margin: { left: 6 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
+          uiText={{ value: 'Content', fontSize: FS - 1, color: TEXT }}
+          onMouseDown={
+            state.status === 'ready'
+              ? () => {
+                  state.contentViewerOpen = true
+                  state.contentFilter = ''
+                  loadSceneContent()
+                }
+              : undefined
+          }
+        />
       </UiEntity>
 
       {/* Tree body */}
@@ -2761,6 +2898,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {parentDialog() ?? []}
       {newEntityDialog() ?? []}
       {assetPickerDialog() ?? []}
+      {contentViewerDialog() ?? []}
       {saveDialogUi() ?? []}
     </UiEntity>
   )

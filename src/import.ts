@@ -42,6 +42,15 @@ export async function fetchCatalog(): Promise<CatalogEntry[]> {
   return Array.isArray(parsed) ? (parsed as CatalogEntry[]) : []
 }
 
+// The current scene's content-map files (sorted, lowercased paths). The engine refreshes from the
+// dev server first, so files added to the project outside the editor are included. For the content
+// viewer and (later) content-file pickers.
+export async function fetchSceneContent(): Promise<string[]> {
+  const reply = await BevyApi.consoleCommand('scene_content')
+  const parsed = JSON.parse(reply) as unknown
+  return Array.isArray(parsed) ? (parsed as string[]) : []
+}
+
 // The asset-packs self-reference token is the exact string '{self}'.
 function isSelf(v: unknown): boolean {
   return v === '{self}'
