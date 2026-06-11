@@ -93,6 +93,8 @@ const VALUE_BG = Color4.create(0, 0, 0, 0.35)
 const TEXT = Color4.create(0.9, 0.9, 0.95, 1)
 const MUTED = Color4.create(0.6, 0.6, 0.68, 1)
 const ACCENT = Color4.create(0.55, 0.78, 1, 1)
+// Faint vertical rule down the left of each nested group, so hierarchy depth is readable at a glance.
+const NEST_BORDER = Color4.create(0.55, 0.6, 0.72, 0.25)
 // on/off state for the interact-context toggles (code + behaviors)
 const ON_BG = Color4.create(0.2, 0.45, 0.26, 1)
 const OFF_BG = Color4.create(0.5, 0.26, 0.26, 1)
@@ -630,15 +632,21 @@ function group(
       ) : (
         []
       )}
-      <UiEntity
-        uiTransform={{
-          width: '100%',
-          flexDirection: 'column',
-          padding: { left: label !== '' ? 10 : 0 }
-        }}
-      >
-        {children}
-      </UiEntity>
+      {label !== '' ? (
+        <UiEntity uiTransform={{ width: '100%', flexDirection: 'row' }}>
+          <UiEntity
+            uiTransform={{ width: 1, height: '100%', margin: { left: 1, right: 8 } }}
+            uiBackground={{ color: NEST_BORDER }}
+          />
+          <UiEntity uiTransform={{ width: '100%', flexDirection: 'column' }}>
+            {children}
+          </UiEntity>
+        </UiEntity>
+      ) : (
+        <UiEntity uiTransform={{ width: '100%', flexDirection: 'column' }}>
+          {children}
+        </UiEntity>
+      )}
     </UiEntity>
   )
 }
