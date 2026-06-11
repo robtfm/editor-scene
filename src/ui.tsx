@@ -6,7 +6,6 @@ import {
   toggleEntity,
   toggleComponent,
   toggleSubsection,
-  clearSubsectionOverrides,
   toggleRawMode,
   clearComponentEdits,
   setActiveAction,
@@ -94,6 +93,13 @@ import {
 } from './schema'
 import { entityName, entityDisplay, isCustomComponent, customComponentNames } from './custom-components'
 import { spinnerGlyph } from './busy'
+import {
+  copyComponents,
+  pasteComponents,
+  importClipboard,
+  clearClipboard,
+  clipboardNames
+} from './clipboard'
 import { shortcutLabels } from './shortcuts'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
@@ -1296,7 +1302,43 @@ function componentNodes(
             }}
           />
         </UiEntity>
-        {/* engine-managed components can't be removed, so no Del button */}
+        <UiEntity
+          uiTransform={{
+            width: 40,
+            height: 20,
+            margin: { right: 4 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: BUTTON_BG }}
+          uiText={{ value: 'Copy', fontSize: FS - 3, color: TEXT }}
+          onMouseDown={() => {
+            copyComponents(entityId, [name])
+          }}
+        />
+        {/* engine-managed components can't be written/removed, so no Paste/Del buttons */}
+        {readOnly ? (
+          []
+        ) : (
+          <UiEntity
+            uiTransform={{
+              width: 40,
+              height: 20,
+              margin: { right: 4 },
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            uiBackground={{ color: name in state.clipboard ? BUTTON_BG : VALUE_BG }}
+            uiText={{
+              value: 'Paste',
+              fontSize: FS - 3,
+              color: name in state.clipboard ? TEXT : MUTED
+            }}
+            onMouseDown={() => {
+              if (name in state.clipboard) requestPaste(entityId, [name])
+            }}
+          />
+        )}
         {readOnly ? (
           []
         ) : (
@@ -1367,7 +1409,6 @@ function entityNode(
   const childIds = (forest.children.get(entityId) ?? []).filter(
     (c) => !path.has(c)
   )
-  const compCount = Object.keys(components).length
   const childCount = childIds.length
   // The chevron now governs only child expansion — components live in the popup
   // window, opened from the component badge.
@@ -1418,7 +1459,6 @@ function entityNode(
             }}
           />
         </UiEntity>
-        {componentsBadge(entityId, compCount)}
         {Number(entityId) >= 512 ? visibilityButton(entityId) : []}
         {Number(entityId) >= 512 ? deleteButton(entityId) : []}
       </UiEntity>
@@ -1435,37 +1475,6 @@ function entityNode(
       )}
     </UiEntity>
   )
-}
-
-// Inline tree badge showing an entity's component count; opens its component
-// window. Highlighted while that entity's window is the open one.
-function componentsBadge(entityId: string, count: number): ReactEcs.JSX.Element {
-  const open = state.componentWindow === entityId
-  return (
-    <UiEntity
-      uiTransform={{
-        width: 48,
-        height: 20,
-        margin: { right: 6 },
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-      uiBackground={{ color: open ? BUTTON_BG : VALUE_BG }}
-      uiText={{ value: `▦ ${count}`, fontSize: FS - 3, color: open ? TEXT : MUTED }}
-      onMouseDown={() => {
-        openComponentWindow(entityId)
-      }}
-    />
-  )
-}
-
-// Open (or switch) the component window onto an entity, resetting the add picker.
-function openComponentWindow(entityId: string): void {
-  state.componentWindow = entityId
-  state.addComponentOpen = false
-  state.addComponentFilter = ''
-  // Start the editor from default subsection state (overrides aren't persisted across reopens).
-  clearSubsectionOverrides()
 }
 
 // Reachable-from-roots set, computed independently of expansion so that the
@@ -3140,11 +3149,228 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
   )
 }
 
+// --- component clipboard (copy / paste / import) ---
+
+// Copy: one component goes straight to the clipboard; several open the picker.
+function requestCopy(entityId: string, names: string[]): void {
+  if (names.length <= 1) {
+    copyComponents(entityId, names)
+    return
+  }
+  state.componentSelect = { mode: 'copy', entityId, names, selected: new Set(names), toAll: false }
+}
+
+// Paste: only what's in the clipboard. One component onto a single selection pastes immediately;
+// otherwise open the picker (which components, and paste-to-all when several are selected).
+function requestPaste(entityId: string, names: string[]): void {
+  const inClip = new Set(clipboardNames())
+  const pasteable = names.filter((n) => inClip.has(n))
+  if (pasteable.length === 0) return
+  if (pasteable.length === 1 && state.selected.size <= 1) {
+    pasteComponents([entityId], pasteable).catch(console.error)
+    return
+  }
+  state.componentSelect = {
+    mode: 'paste',
+    entityId,
+    names: pasteable,
+    selected: new Set(pasteable),
+    toAll: false
+  }
+}
+
+// A small checkbox row used in the copy/paste picker.
+function checkRow(label: string, checked: boolean, onClick: () => void): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key={`chk-${label}`}
+      uiTransform={{ width: '100%', height: 22, flexDirection: 'row', alignItems: 'center' }}
+      onMouseDown={onClick}
+    >
+      <UiEntity
+        uiTransform={{
+          width: 18,
+          height: 18,
+          margin: { right: 6 },
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}
+        uiBackground={{ color: checked ? TOGGLE_ON : VALUE_BG }}
+        uiText={{ value: checked ? '✓' : '', fontSize: FS - 2, color: TEXT }}
+      />
+      <UiEntity
+        uiTransform={{ flexGrow: 1, height: 18 }}
+        uiText={{ value: label, fontSize: FS - 1, color: TEXT, textAlign: 'middle-left' }}
+      />
+    </UiEntity>
+  )
+}
+
+// Copy/paste component picker: choose which components, and (paste + multi-select) whether to apply
+// to every selected entity.
+function componentSelectDialog(): ReactEcs.JSX.Element | null {
+  const sel = state.componentSelect
+  if (sel === null) return null
+  const isPaste = sel.mode === 'paste'
+  const multiSel = state.selected.size > 1
+  const close = (): void => {
+    state.componentSelect = null
+  }
+  const confirm = (): void => {
+    const chosen = sel.names.filter((n) => sel.selected.has(n))
+    if (chosen.length > 0) {
+      if (isPaste) {
+        pasteComponents(sel.toAll ? [...state.selected] : [sel.entityId], chosen).catch(
+          console.error
+        )
+      } else {
+        copyComponents(sel.entityId, chosen)
+      }
+    }
+    close()
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{ width: '100%', height: '100%', positionType: 'absolute', position: { top: 0, left: 0 } }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {}}
+      />
+      <UiEntity
+        uiTransform={{ width: 360, maxHeight: 420, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 6 } }}
+          uiText={{
+            value: isPaste ? 'Paste components' : 'Copy components',
+            fontSize: FS + 1,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            maxHeight: 280,
+            flexDirection: 'column',
+            overflow: 'scroll',
+            scrollVisible: 'vertical'
+          }}
+        >
+          {sel.names.map((n) =>
+            checkRow(displayComponentName(n), sel.selected.has(n), () => {
+              if (sel.selected.has(n)) sel.selected.delete(n)
+              else sel.selected.add(n)
+            })
+          )}
+        </UiEntity>
+        {isPaste && multiSel
+          ? checkRow(`Paste to all ${state.selected.size} selected`, sel.toAll, () => {
+              sel.toAll = !sel.toAll
+            })
+          : []}
+        <UiEntity
+          uiTransform={{
+            width: '100%',
+            height: 30,
+            flexDirection: 'row',
+            alignItems: 'center',
+            margin: { top: 8 }
+          }}
+        >
+          {dialogButton(isPaste ? 'Paste' : 'Copy', 90, BUTTON_BG, confirm)}
+          {dialogButton('Cancel', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
+// Manual clipboard import: paste component JSON into the input and apply it to the in-app clipboard.
+function clipboardImportDialog(): ReactEcs.JSX.Element | null {
+  if (!state.clipboardImportOpen) return null
+  const close = (): void => {
+    state.clipboardImportOpen = false
+    state.clipboardImportText = ''
+  }
+  const apply = (): void => {
+    if (importClipboard(state.clipboardImportText)) close()
+    // invalid JSON → leave the dialog open
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{ width: '100%', height: '100%', positionType: 'absolute', position: { top: 0, left: 0 } }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {}}
+      />
+      <UiEntity
+        uiTransform={{ width: 460, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 24, alignItems: 'center', margin: { bottom: 6 } }}
+          uiText={{
+            value: 'Import components — paste JSON',
+            fontSize: FS + 1,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <Input
+          key="clipboard-import"
+          uiTransform={{
+            elementId: 'clipboard-import',
+            width: '100%',
+            height: 140,
+            margin: { bottom: 10 },
+            padding: { left: 4, right: 4 }
+          }}
+          uiBackground={{ color: VALUE_BG }}
+          value={state.clipboardImportText}
+          placeholder='{ "Transform": { ... } }'
+          fontSize={FS - 1}
+          color={TEXT}
+          textAlign="top-left"
+          font="monospace"
+          multiLine
+          onChange={(v) => {
+            state.clipboardImportText = v
+          }}
+        />
+        <UiEntity uiTransform={{ width: '100%', height: 30, flexDirection: 'row', alignItems: 'center' }}>
+          {dialogButton('Apply', 90, BUTTON_BG, apply)}
+          {dialogButton('Cancel', 80, REVERT_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 // Floating popup that hosts an entity's components (moved out of the tree). Lets
 // you expand/edit each component, delete components, and add new ones.
 function componentWindowPanel(): ReactEcs.JSX.Element | null {
-  const id = state.componentWindow
-  if (id === null) return null
+  const id = state.activeEntity
+  if (id === null || !state.componentPanelOpen) return null
   const components = state.snapshot[id] ?? {}
   const count = Object.keys(components).length
 
@@ -3185,7 +3411,7 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
           uiBackground={{ color: REVERT_BG }}
           uiText={{ value: '✕', fontSize: FS, color: TEXT }}
           onMouseDown={() => {
-            state.componentWindow = null
+            state.componentPanelOpen = false
           }}
         />
       </UiEntity>
@@ -3218,6 +3444,83 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
         ) : (
           []
         )}
+      </UiEntity>
+
+      {/* Clipboard bar: copy/paste all + status + clear/import */}
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: 26,
+          flexDirection: 'row',
+          alignItems: 'center',
+          padding: { left: 6, right: 6, top: 4 }
+        }}
+      >
+        <UiEntity
+          uiTransform={{ width: 52, height: 20, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: count > 0 ? BUTTON_BG : VALUE_BG }}
+          uiText={{ value: 'Copy', fontSize: FS - 3, color: count > 0 ? TEXT : MUTED }}
+          onMouseDown={() => {
+            if (count > 0) requestCopy(id, Object.keys(components).filter((n) => !isHiddenComponent(n)))
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: 52,
+            height: 20,
+            margin: { left: 4 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: clipboardNames().length > 0 ? BUTTON_BG : VALUE_BG }}
+          uiText={{
+            value: 'Paste',
+            fontSize: FS - 3,
+            color: clipboardNames().length > 0 ? TEXT : MUTED
+          }}
+          onMouseDown={() => {
+            if (clipboardNames().length > 0) requestPaste(id, clipboardNames())
+          }}
+        />
+        <UiEntity
+          uiTransform={{ flexGrow: 1, height: 20, padding: { left: 8 } }}
+          uiText={{
+            value:
+              clipboardNames().length > 0
+                ? `${clipboardNames().length} copied`
+                : 'clipboard empty',
+            fontSize: FS - 3,
+            color: MUTED,
+            textAlign: 'middle-left'
+          }}
+        />
+        {clipboardNames().length > 0 ? (
+          <UiEntity
+            uiTransform={{
+              width: 44,
+              height: 20,
+              margin: { right: 4 },
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            uiBackground={{ color: REVERT_BG }}
+            uiText={{ value: 'Clear', fontSize: FS - 3, color: TEXT }}
+            onMouseDown={() => {
+              clearClipboard()
+            }}
+          />
+        ) : (
+          []
+        )}
+        <UiEntity
+          uiTransform={{ width: 52, height: 20, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: BUTTON_BG }}
+          uiText={{ value: 'Import', fontSize: FS - 3, color: TEXT }}
+          onMouseDown={() => {
+            state.clipboardImportOpen = true
+            state.clipboardImportText = ''
+          }}
+        />
       </UiEntity>
 
       {/* Component list */}
@@ -3459,6 +3762,8 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {contentViewerDialog() ?? []}
       {filePickerDialog() ?? []}
       {saveDialogUi() ?? []}
+      {componentSelectDialog() ?? []}
+      {clipboardImportDialog() ?? []}
     </UiEntity>
   )
 }

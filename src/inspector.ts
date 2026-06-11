@@ -413,7 +413,7 @@ export async function reloadSnapshot(): Promise<void> {
 // local snapshot (every edit updates it; see writeComponent/writeDelete) and
 // skip the refetch entirely while frozen.
 const SETTLE_MS = 150
-async function reloadAfter(goneIds: string[] = []): Promise<void> {
+export async function reloadAfter(goneIds: string[] = []): Promise<void> {
   if (state.frozen) return
   for (let attempt = 0; attempt < 6; attempt++) {
     await sleep(SETTLE_MS)
@@ -484,10 +484,6 @@ function removeLocal(id: string, recursive: boolean): void {
   for (const r of all) {
     delete state.snapshot[r]
     markEntityDeleted(r)
-  }
-  // Close the component window if its entity was removed.
-  if (state.componentWindow !== null && !(state.componentWindow in state.snapshot)) {
-    state.componentWindow = null
   }
 }
 

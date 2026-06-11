@@ -72,10 +72,10 @@ export const state = {
   behaviors: { tween: true, animation: true, billboard: true, media: true },
   // entity id whose delete-confirm dialog is open, or null
   deleteConfirm: null as string | null,
-  // entity id whose component window (popup editor) is open, or null. Components
-  // live here rather than inline in the tree.
-  componentWindow: null as string | null,
-  // whether the add-component picker (inside the component window) is open
+  // whether the docked component editor (always shows the active entity) is open. The ✕ closes it;
+  // selecting an entity re-opens it.
+  componentPanelOpen: true,
+  // whether the add-component picker (inside the component editor) is open
   addComponentOpen: false,
   // filter text for the add-component picker
   addComponentFilter: '',
@@ -179,7 +179,22 @@ export const state = {
   // true while a long op (reload-reapply, undo/redo settle) is in flight — drives the busy spinner.
   busy: false,
   // which history button is hovered ('undo'/'redo'), for the next-action tooltip; null = none.
-  hoveredHistory: null as 'undo' | 'redo' | null
+  hoveredHistory: null as 'undo' | 'redo' | null,
+
+  // --- component clipboard (in-app; copy also exports JSON to the OS clipboard) ---
+  // copied components, name -> value. Empty = nothing copied. Set by copy and by manual import.
+  clipboard: {} as Record<string, unknown>,
+  // true while the "import clipboard JSON" input dialog is open, plus its draft text.
+  clipboardImportOpen: false,
+  clipboardImportText: '',
+  // the copy/paste component-picker dialog (checkbox list), or null when closed.
+  componentSelect: null as {
+    mode: 'copy' | 'paste'
+    entityId: string
+    names: string[]
+    selected: Set<string>
+    toAll: boolean
+  } | null
 }
 
 // Record an editor edit in the changelog (so save knows it was us, not runtime churn), capturing
@@ -393,6 +408,11 @@ export function selectionClick(id: string, additive: boolean, toggle: boolean): 
   }
   state.selected.add(id)
   state.activeEntity = id
+  // A fresh selection (re)opens the docked component editor on it, reset to defaults.
+  state.componentPanelOpen = true
+  state.addComponentOpen = false
+  state.addComponentFilter = ''
+  clearSubsectionOverrides()
 }
 
 // Apply a drag-box result: `remove` (ctrl) unselects the boxed entities,

@@ -16,6 +16,11 @@ function closeTopModal(): boolean {
   } else if (state.newEntityOpen) {
     state.newEntityOpen = false
     state.newEntityName = ''
+  } else if (state.clipboardImportOpen) {
+    state.clipboardImportOpen = false
+    state.clipboardImportText = ''
+  } else if (state.componentSelect !== null) {
+    state.componentSelect = null
   } else if (state.parentConfirm) {
     state.parentConfirm = false
   } else if (state.reloadConfirm) {
@@ -24,8 +29,8 @@ function closeTopModal(): boolean {
     state.deleteConfirm = null
   } else if (state.saveDialog !== null) {
     cancelSaveDialog()
-  } else if (state.componentWindow !== null) {
-    state.componentWindow = null
+  } else if (state.activeEntity !== null && state.componentPanelOpen) {
+    state.componentPanelOpen = false
   } else {
     return false
   }
