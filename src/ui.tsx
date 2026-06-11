@@ -84,6 +84,7 @@ import {
   type SchemaNode
 } from './schema'
 import { entityName, isCustomComponent, customComponentNames } from './custom-components'
+import { shortcutLabels } from './shortcuts'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
 const HEADER_BG = Color4.create(0.14, 0.14, 0.18, 1)
@@ -1456,12 +1457,13 @@ function treeBody(): ReactEcs.JSX.Element[] {
 }
 
 // Overlay actions. Extend this list to add more world-space tools.
+// Select (Tab) first, then the numbered tools in shortcut order (keys 1-4).
 const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'select', label: 'Select' },
+  { id: 'interact', label: 'Interact' },
   { id: 'translate', label: 'Translate' },
   { id: 'rotate', label: 'Rotate' },
-  { id: 'scale', label: 'Scale' },
-  { id: 'interact', label: 'Interact' }
+  { id: 'scale', label: 'Scale' }
 ]
 
 // One fullscreen panel compositing the shared overlay TextureCamera (gizmo handles + parent/child
@@ -1511,10 +1513,22 @@ function overlayPanel(): ReactEcs.JSX.Element | null {
   )
 }
 
+// A small key-hint in a button's top-right corner. `dim` mutes it on a disabled/inactive button.
+function shortcutBadge(key: string, dim: boolean): ReactEcs.JSX.Element {
+  return (
+    <UiEntity
+      key="shortcut"
+      uiTransform={{ positionType: 'absolute', position: { top: -1, right: 3 } }}
+      uiText={{ value: key, fontSize: FS - 5, color: dim ? MUTED : ACCENT }}
+    />
+  )
+}
+
 function toggleChip(
   key: string,
   label: string,
-  onClick: () => void
+  onClick: () => void,
+  shortcut?: string
 ): ReactEcs.JSX.Element {
   return (
     <UiEntity
@@ -1529,7 +1543,9 @@ function toggleChip(
       uiBackground={{ color: REVERT_BG }}
       uiText={{ value: label, fontSize: FS - 2, color: TEXT }}
       onMouseDown={onClick}
-    />
+    >
+      {shortcut !== undefined ? shortcutBadge(shortcut, false) : []}
+    </UiEntity>
   )
 }
 
@@ -1686,9 +1702,14 @@ const CAM_LABEL: Record<string, string> = {
   target: 'Camera: Target'
 }
 function cameraModeButton(): ReactEcs.JSX.Element {
-  return toggleChip('cam-mode', CAM_LABEL[state.camMode], () => {
-    cycleCamMode()
-  })
+  return toggleChip(
+    'cam-mode',
+    CAM_LABEL[state.camMode],
+    () => {
+      cycleCamMode()
+    },
+    shortcutLabels.camera
+  )
 }
 
 // Axis-orient buttons — context for the camera section. Always present (so the
@@ -1940,7 +1961,11 @@ function actionButton(action: {
               setActiveAction(action.id)
             }
       }
-    />
+    >
+      {shortcutLabels[action.id] !== undefined
+        ? shortcutBadge(shortcutLabels[action.id], disabled)
+        : []}
+    </UiEntity>
   )
 }
 

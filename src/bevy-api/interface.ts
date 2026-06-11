@@ -32,4 +32,11 @@ export type BevyApiInterface = {
   getSystemActionStream: () => Promise<
     AsyncIterable<{ action: string; pressed: boolean }>
   >
+
+  // Current key bindings (super-user scenes only). Each entry is [action, keys]: the action is an
+  // externally-tagged enum ({ Scene: 'IaAction3' } / { System: 'Map' }) and keys are bevy KeyCode /
+  // Mouse / Gamepad strings ('Digit1', 'Tab', 'KeyB', 'Mouse Left', …).
+  getInputBindings: () => Promise<{ bindings: Array<[InputBindingAction, string[]]> }>
 }
+
+export type InputBindingAction = { Scene?: string; System?: string }

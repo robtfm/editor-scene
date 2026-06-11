@@ -1,5 +1,6 @@
+import { engine, inputSystem, InputAction, PointerEventType } from '@dcl/sdk/ecs'
 import { BevyApi } from './bevy-api'
-import { state, setActiveAction, clearSelection } from './state'
+import { state, setActiveAction, clearSelection, canTransform, TRANSFORM_TOOLS } from './state'
 import { cancelSaveDialog } from './inspector'
 import { cycleCamMode } from './free-cam'
 
@@ -29,6 +30,26 @@ function closeTopModal(): boolean {
   return true
 }
 
+// Number keys 1-4 pick the tools, in toolbar order after Select (IA_ACTION_3..6 are bound to
+// Digit1..4 in the engine). Unlike the system-action stream below, these are ordinary input actions,
+// polled per frame on key-down.
+const TOOL_KEYS: Array<[InputAction, string]> = [
+  [InputAction.IA_ACTION_3, 'interact'],
+  [InputAction.IA_ACTION_4, 'translate'],
+  [InputAction.IA_ACTION_5, 'rotate'],
+  [InputAction.IA_ACTION_6, 'scale']
+]
+
+function toolShortcuts(): void {
+  for (const [action, tool] of TOOL_KEYS) {
+    if (!inputSystem.isTriggered(action, PointerEventType.PET_DOWN)) continue
+    // A transform tool with no transformable active is unavailable (its button is disabled) — the
+    // key does nothing rather than switching to the interact fallback.
+    if (TRANSFORM_TOOLS.includes(tool) && !canTransform()) continue
+    setActiveAction(tool)
+  }
+}
+
 // System actions are observable only by super-user scenes (a normal scene can't see them) via the
 // system action stream. We bind two engine keys to editor behaviour:
 //   - Tab (SystemAction::Map) → toggle Select / last tool.
@@ -37,6 +58,7 @@ function closeTopModal(): boolean {
 // NB: we can't swallow these from the scene, so the engine still acts on them too (e.g. Map/Tab may
 // also toggle the engine map; M shares the Map binding so it triggers the same toggle).
 export function startSystemActions(): void {
+  engine.addSystem(toolShortcuts)
   listen().catch((e) => {
     console.error('system action stream ended', e)
   })

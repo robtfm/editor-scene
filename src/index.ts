@@ -10,6 +10,7 @@ import { startSystemActions } from './system-actions'
 import { startHighlightSync } from './highlight'
 import { setupMeshSelect } from './mesh-select'
 import { setupInteract } from './interact'
+import { loadShortcuts } from './shortcuts'
 
 export function main(): void {
   const _log = console.log
@@ -26,6 +27,7 @@ export function main(): void {
   startHighlightSync()
   setupMeshSelect()
   setupInteract()
+  loadShortcuts().catch(console.error)
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {
