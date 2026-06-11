@@ -14,6 +14,7 @@ import {
   markEntityDeleted,
   resetSaveChangelog,
   selectEntityInTree,
+  setActiveAction,
   type ComponentKey,
   type Snapshot
 } from './state'
@@ -45,6 +46,7 @@ import {
   preloadSchemas
 } from './schema'
 import { localRelativeTo } from './world-pos'
+import { playerSpawnPosition } from './spawn'
 import { sleep } from './utils'
 import { Vector3, Quaternion } from '@dcl/sdk/math'
 import { rotateVec3ByQuat } from './perspective-to-screen'
@@ -396,7 +398,9 @@ export async function createEntities(
 }
 
 // Create a single authored entity with a default Transform (parented under `parent`, 0 = scene
-// root) and a Name, then select it. Mirrors the Hub's addChild operation.
+// root) and a Name, then select it. Mirrors the Hub's addChild operation. An unparented entity
+// (parent 0) is then placed in front of the player and the translate tool auto-selected, so it
+// spawns in view and ready to position; a child stays at its parent's origin.
 export async function addEntity(name: string, parent: number): Promise<void> {
   const ids = await createEntities([
     {
@@ -417,6 +421,26 @@ export async function addEntity(name: string, parent: number): Promise<void> {
     state.activeEntity = eid
     // expand ancestors and scroll the tree to the new row
     selectEntityInTree(state.snapshot, eid)
+    // Place an unparented entity in front of the player. Routed through setComponentValue (the
+    // editor's component-set path) rather than a raw create-time Transform: it writes optimistically
+    // *and* re-pulls, so the snapshot reliably carries the Transform the gizmo reads — a raw
+    // create-time write can be clobbered by createEntities' own settle reload before the engine ticks
+    // it in (leaving the new entity Transform-less and the gizmo stranded at the origin).
+    if (parent === 0) {
+      const position = playerSpawnPosition() ?? { x: 0, y: 0, z: 0 }
+      await setComponentValue(
+        componentKey(eid, 'Transform'),
+        eid,
+        'Transform',
+        JSON.stringify({
+          position,
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          scale: { x: 1, y: 1, z: 1 },
+          parent
+        })
+      )
+      setActiveAction('translate')
+    }
   }
 }
 

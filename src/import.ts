@@ -6,9 +6,10 @@
 // (Transform.parent), translate composite component names to editor names, and write the values.
 
 import { BevyApi } from './bevy-api'
-import { state, selectEntityInTree, type Snapshot } from './state'
+import { state, selectEntityInTree, setActiveAction, componentKey, type Snapshot } from './state'
 import { editorNameForComposite, componentIdForName } from './composite'
-import { allocateNamedEntities, writeComponent, reloadSnapshot } from './inspector'
+import { allocateNamedEntities, writeComponent, reloadSnapshot, setComponentValue } from './inspector'
+import { playerSpawnPosition } from './spawn'
 import { sleep } from './utils'
 
 const COMPOSITE_NAME = 'core-schema::Name'
@@ -146,6 +147,11 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
   }
   if (!composite || !Array.isArray(composite.components)) return
 
+  // Unparented import: place the top-level object in front of the player (carried by the wrapper for
+  // a multi-root asset, or the single root directly) so it lands in view rather than at the scene
+  // origin. Null when not at scene root or the player/world-origin can't be resolved → origin.
+  const spawnPos = parent === 0 ? playerSpawnPosition() : null
+
   // --- gather every composite entity, its Transform, Name, and (mapped) components ---
   const entityIds = new Set<number>()
   const transforms = new Map<number, TransformJson>()
@@ -208,6 +214,11 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     if (n != null) idMap.set(eid, n)
   })
 
+  // The top-level (selected, gizmo-targeted) entity's Transform, re-applied through the editor's
+  // component-set path after the bulk import settles — the raw hierarchy writes can be clobbered by
+  // the settle reload before the engine ticks them in, which would strand the gizmo at the origin.
+  let topTransform: Record<string, unknown> | null = null
+
   // Multiple roots get a shared wrapper entity (like the Hub) so the import is one selectable/movable
   // object; a single root is used directly.
   let wrapperNew: number | null = null
@@ -215,16 +226,13 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     const [w] = await allocateNamedEntities([{ value: assetName }])
     if (w != null) {
       wrapperNew = w
-      await writeComponent(
-        String(w),
-        'Transform',
-        JSON.stringify({
-          position: { x: 0, y: 0, z: 0 },
-          rotation: { x: 0, y: 0, z: 0, w: 1 },
-          scale: { x: 1, y: 1, z: 1 },
-          parent
-        })
-      )
+      topTransform = {
+        position: spawnPos ?? { x: 0, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0, w: 1 },
+        scale: { x: 1, y: 1, z: 1 },
+        parent
+      }
+      await writeComponent(String(w), 'Transform', JSON.stringify(topTransform))
     }
   }
 
@@ -271,13 +279,17 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     // -> invisible), matching the Hub's addChild.
     const t = transforms.get(eid)
     const parentNew = isRoot(eid) ? wrapperNew ?? parent : idMap.get(t!.parent as number) ?? parent
-    const transformValue = {
-      position: t?.position ?? { x: 0, y: 0, z: 0 },
+    // The single-root asset carries the player-spawn offset on its root (a multi-root asset carries
+    // it on the wrapper instead, so its roots keep their composite-relative layout).
+    const position = eid === mainRoot && spawnPos !== null ? spawnPos : t?.position ?? { x: 0, y: 0, z: 0 }
+    const transformValue: Record<string, unknown> = {
+      position,
       rotation: t?.rotation ?? { x: 0, y: 0, z: 0, w: 1 },
       scale: t?.scale ?? { x: 1, y: 1, z: 1 },
       parent: parentNew
     }
     await writeComponent(newIdStr, 'Transform', JSON.stringify(transformValue))
+    if (eid === mainRoot) topTransform = transformValue
 
     const m = comps.get(eid)
     if (m) {
@@ -337,5 +349,14 @@ export async function importAsset(assetId: string, parent = 0, assetName = 'Asse
     state.selected.add(eid)
     state.activeEntity = eid
     selectEntityInTree(state.snapshot, eid)
+    // Unparented import: re-apply the top-level Transform through the editor's component-set path so
+    // the snapshot reliably carries it (the bulk raw write can be lost to the settle reload), then
+    // drop into translate so the freshly-placed object is ready to position.
+    if (parent === 0) {
+      if (topTransform !== null) {
+        await setComponentValue(componentKey(eid, 'Transform'), eid, 'Transform', JSON.stringify(topTransform))
+      }
+      setActiveAction('translate')
+    }
   }
 }

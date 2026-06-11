@@ -87,6 +87,20 @@ export function computeWorldPositions(
   return out
 }
 
+// The parent-0 (scene-root-local) Transform.position that places a new root entity at world
+// position `world` — the inverse of computeWorldPositions for a root entity (scene-local = world +
+// the world origin's scene-local position). Matches worldToLocalPosition for a parent-0 entity.
+// Null when entity 5 (the world origin) is absent.
+export function worldToRootLocal(
+  snapshot: Snapshot,
+  world: Vector3
+): { x: number; y: number; z: number } | null {
+  if (!('5' in snapshot)) return null
+  const origin = composed(snapshot, '5', new Map(), new Set()).pos
+  const p = Vector3.add(world, origin)
+  return { x: p.x, y: p.y, z: p.z }
+}
+
 // World position + rotation of a single entity (for orienting a local-axis
 // gizmo). World position = composed-to-root minus entity 5; world rotation =
 // the composed rotation (the world origin's rotation is identity).
