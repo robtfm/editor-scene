@@ -35,6 +35,7 @@ import {
   isCustomComponent,
   customComponentId,
   customTimestamp,
+  noteCustomTimestamp,
   encodeCustomComponent,
   createCustomDefault,
   stringToBase64,
@@ -461,6 +462,10 @@ export async function writeComponent(entityId: string, name: string, json: strin
       throw new Error(`cannot encode custom component ${name}`)
     }
     const ts = customTimestamp(entityId, name) + 1
+    // Record the ts now so a follow-up write bumps past it even before the next snapshot pull (e.g.
+    // while frozen, where reloadAfter is a no-op) — otherwise the next write reuses the same ts and
+    // loses LWW ("timestamp not newer").
+    noteCustomTimestamp(entityId, name, ts)
     await BevyApi.consoleCommand('set_component_raw', [entityId, String(id), String(ts), b64])
     return
   }

@@ -173,6 +173,13 @@ export function customTimestamp(entityId: string, name: string): number {
   return timestamps.get(`${entityId}/${name}`) ?? 0
 }
 
+// Record the timestamp the editor just wrote, so a follow-up write bumps past it even when no fresh
+// snapshot has been pulled in between (e.g. while the scene is frozen, when reloadAfter is a no-op).
+export function noteCustomTimestamp(entityId: string, name: string, ts: number): void {
+  const key = `${entityId}/${name}`
+  if (ts > (timestamps.get(key) ?? 0)) timestamps.set(key, ts)
+}
+
 // UTF-8 encode a string (no TextEncoder in the scene runtime).
 function utf8Bytes(s: string): Uint8Array {
   const out: number[] = []

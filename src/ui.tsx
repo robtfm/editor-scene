@@ -1264,16 +1264,20 @@ function displayComponentName(name: string): string {
   return i >= 0 ? name.slice(i + 2) : name
 }
 
+// Component display order: by category, then display name — the order used everywhere components are
+// listed (the editor, the copy/paste picker, the copied JSON).
+function sortComponentNames(names: string[]): string[] {
+  return [...names].sort((a, b) => {
+    const order = CATEGORY_ORDER[componentCategory(a)] - CATEGORY_ORDER[componentCategory(b)]
+    return order !== 0 ? order : displayComponentName(a).localeCompare(displayComponentName(b))
+  })
+}
+
 function componentNodes(
   entityId: string,
   components: Record<string, unknown>
 ): ReactEcs.JSX.Element[] {
-  const names = Object.keys(components)
-    .filter((n) => !isHiddenComponent(n))
-    .sort((a, b) => {
-      const order = CATEGORY_ORDER[componentCategory(a)] - CATEGORY_ORDER[componentCategory(b)]
-      return order !== 0 ? order : displayComponentName(a).localeCompare(displayComponentName(b))
-    })
+  const names = sortComponentNames(Object.keys(components).filter((n) => !isHiddenComponent(n)))
 
   const boxes: ReactEcs.JSX.Element[] = []
   for (const name of names) {
@@ -1302,21 +1306,25 @@ function componentNodes(
             }}
           />
         </UiEntity>
-        <UiEntity
-          uiTransform={{
-            width: 40,
-            height: 20,
-            margin: { right: 4 },
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-          uiBackground={{ color: BUTTON_BG }}
-          uiText={{ value: 'Copy', fontSize: FS - 3, color: TEXT }}
-          onMouseDown={() => {
-            copyComponents(entityId, [name])
-          }}
-        />
-        {/* engine-managed components can't be written/removed, so no Paste/Del buttons */}
+        {/* engine-managed (read-only) components can't be copied/written/removed */}
+        {readOnly ? (
+          []
+        ) : (
+          <UiEntity
+            uiTransform={{
+              width: 40,
+              height: 20,
+              margin: { right: 4 },
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            uiBackground={{ color: BUTTON_BG }}
+            uiText={{ value: 'Copy', fontSize: FS - 3, color: TEXT }}
+            onMouseDown={() => {
+              copyComponents(entityId, [name])
+            }}
+          />
+        )}
         {readOnly ? (
           []
         ) : (
@@ -3151,20 +3159,22 @@ function addComponentPicker(entityId: string): ReactEcs.JSX.Element {
 
 // --- component clipboard (copy / paste / import) ---
 
-// Copy: one component goes straight to the clipboard; several open the picker.
+// Copy: one component goes straight to the clipboard; several open the picker. Names are ordered as
+// in the editor so the picker — and the copied JSON — match it.
 function requestCopy(entityId: string, names: string[]): void {
   if (names.length <= 1) {
     copyComponents(entityId, names)
     return
   }
-  state.componentSelect = { mode: 'copy', entityId, names, selected: new Set(names), toAll: false }
+  const ordered = sortComponentNames(names)
+  state.componentSelect = { mode: 'copy', entityId, names: ordered, selected: new Set(ordered), toAll: false }
 }
 
 // Paste: only what's in the clipboard. One component onto a single selection pastes immediately;
 // otherwise open the picker (which components, and paste-to-all when several are selected).
 function requestPaste(entityId: string, names: string[]): void {
   const inClip = new Set(clipboardNames())
-  const pasteable = names.filter((n) => inClip.has(n))
+  const pasteable = sortComponentNames(names.filter((n) => inClip.has(n)))
   if (pasteable.length === 0) return
   if (pasteable.length === 1 && state.selected.size <= 1) {
     pasteComponents([entityId], pasteable).catch(console.error)
@@ -3373,6 +3383,10 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
   if (id === null || !state.componentPanelOpen) return null
   const components = state.snapshot[id] ?? {}
   const count = Object.keys(components).length
+  // copyable = writable (non-read-only, non-hidden) components.
+  const copyable = Object.keys(components).filter(
+    (n) => !isHiddenComponent(n) && componentCategory(n) !== 'readonly'
+  )
 
   return (
     <UiEntity
@@ -3458,10 +3472,10 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
       >
         <UiEntity
           uiTransform={{ width: 52, height: 20, alignItems: 'center', justifyContent: 'center' }}
-          uiBackground={{ color: count > 0 ? BUTTON_BG : VALUE_BG }}
-          uiText={{ value: 'Copy', fontSize: FS - 3, color: count > 0 ? TEXT : MUTED }}
+          uiBackground={{ color: copyable.length > 0 ? BUTTON_BG : VALUE_BG }}
+          uiText={{ value: 'Copy', fontSize: FS - 3, color: copyable.length > 0 ? TEXT : MUTED }}
           onMouseDown={() => {
-            if (count > 0) requestCopy(id, Object.keys(components).filter((n) => !isHiddenComponent(n)))
+            if (copyable.length > 0) requestCopy(id, copyable)
           }}
         />
         <UiEntity
