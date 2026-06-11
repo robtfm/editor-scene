@@ -36,6 +36,10 @@ import {
   refresh,
   reloadScene,
   openReloadDialog,
+  undo,
+  redo,
+  canUndo,
+  canRedo,
   setComponentValue,
   applyStructuredEdits,
   pauseScene,
@@ -3197,12 +3201,40 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           }}
         >
           <UiEntity
-            uiTransform={{ width: 320, height: 20, alignItems: 'center' }}
+            uiTransform={{ width: 210, height: 20, alignItems: 'center' }}
             uiText={{
               value: state.saveStatus !== '' ? state.saveStatus : statusText(),
               fontSize: FS - 2,
               color: MUTED,
               textAlign: 'middle-left'
+            }}
+          />
+          <UiEntity
+            uiTransform={{
+              width: 52,
+              height: 22,
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: { right: 4 }
+            }}
+            uiBackground={{ color: canUndo() ? BUTTON_BG : HEADER_BG }}
+            uiText={{ value: 'Undo', fontSize: FS - 1, color: canUndo() ? TEXT : MUTED }}
+            onMouseDown={() => {
+              if (canUndo()) undo().catch(console.error)
+            }}
+          />
+          <UiEntity
+            uiTransform={{
+              width: 52,
+              height: 22,
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: { right: 4 }
+            }}
+            uiBackground={{ color: canRedo() ? BUTTON_BG : HEADER_BG }}
+            uiText={{ value: 'Redo', fontSize: FS - 1, color: canRedo() ? TEXT : MUTED }}
+            onMouseDown={() => {
+              if (canRedo()) redo().catch(console.error)
             }}
           />
           <UiEntity

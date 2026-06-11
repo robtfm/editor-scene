@@ -15,9 +15,18 @@ import {
   resetSaveChangelog,
   selectEntityInTree,
   setActiveAction,
+  beginTxn,
+  commitTxn,
+  recordOp,
+  snapshotChangelog,
+  restoreChangelog,
+  pushReloadEntry,
+  clearUndoHistory,
   type ComponentKey,
-  type Snapshot
+  type Snapshot,
+  type UndoEntry
 } from './state'
+import { cell, ABSENT, type Cell } from './diff-util'
 import { buildEditedJson } from './fields'
 import { logicalSnapshot, resetOverlays } from './overlays'
 import { resetHighlightSync } from './highlight'
@@ -90,6 +99,8 @@ export async function refresh(): Promise<void> {
 
   await syncFrozenState()
   await reloadSnapshot()
+  // Resync re-pulls the live baseline the undo entries were captured against — clear them.
+  clearUndoHistory()
 }
 
 // Open the reload confirm dialog (reapply local changes vs reset), or — with no local changes —
@@ -113,16 +124,21 @@ export async function openReloadDialog(): Promise<void> {
 // scene — including recreating editor-created entities at their original ids (lossless); otherwise
 // discard local changes for a clean reset. The per-frame systems (overlays, pick colliders,
 // highlight) re-apply themselves once the snapshot + selection are restored.
-export async function reloadScene(reapply: boolean): Promise<void> {
+//
+// Clears undo history by default (a manual reload is a fresh start); the undo/redo machinery passes
+// `keepHistory` since it drives reload itself and must not wipe the stacks it's unwinding.
+export async function reloadScene(
+  reapply: boolean,
+  opts: { keepHistory?: boolean } = {}
+): Promise<void> {
   const scene = state.scene
   if (scene === undefined) return
   const wasFrozen = state.frozen
   const selected = [...state.selected]
   const active = state.activeEntity
 
-  // Identify the editor-created entities (not on disk) to recreate — from the *pre-reload* snapshot,
-  // since the reload wipes them from view.
-  const recreate = reapply ? addedAuthoredEntities(await saveBaseline(), state.snapshot) : []
+  // The editor-created entities (not on disk) to recreate, from the changelog.
+  const recreate = reapply ? addedAuthoredEntities(await saveBaseline()) : []
 
   // The old scene's engine-side overlays/highlight are wiped with it. Forget our bookkeeping so the
   // first post-reload snapshot isn't reverted against dead overlays and the reconcilers re-apply.
@@ -147,8 +163,15 @@ export async function reloadScene(reapply: boolean): Promise<void> {
   let status: string
   if (reapply) {
     // Replay while the fresh scene is playing, so the writes tick in (a frozen scene never processes
-    // inbound CRDT messages). `failed` = entities whose original id collided on the fresh scene.
-    const failed = await reapplyChangelog(recreate)
+    // inbound CRDT messages). Suppress recording — the replay isn't a user action.
+    const prevSuppress = state.suppressUndo
+    state.suppressUndo = true
+    let failed: string[]
+    try {
+      failed = await reapplyChangelog(recreate)
+    } finally {
+      state.suppressUndo = prevSuppress
+    }
     await sleep(SETTLE_MS)
     await reloadSnapshot()
     status =
@@ -164,6 +187,7 @@ export async function reloadScene(reapply: boolean): Promise<void> {
   state.activeEntity = active !== null && active in state.snapshot ? active : null
 
   if (wasFrozen) await pauseScene()
+  if (!opts.keepHistory) clearUndoHistory()
   state.saveStatus = status
 }
 
@@ -252,6 +276,60 @@ async function reapplyChangelog(recreate: string[]): Promise<string[]> {
     }
   }
   return [...failed]
+}
+
+// --- undo / redo ---
+
+export function canUndo(): boolean {
+  return state.undoStack.length > 0
+}
+
+export function canRedo(): boolean {
+  return state.redoStack.length > 0
+}
+
+// Re-apply one recorded component leaf (present → write, absent → delete). Caller runs it under
+// suppressUndo so it records nothing.
+async function applyCell(entityId: string, name: string, c: Cell): Promise<void> {
+  if (c.present) {
+    await writeComponent(entityId, name, JSON.stringify(c.value))
+  } else {
+    deleteComponent(entityId, name)
+  }
+}
+
+// Apply one entry's target side: component entries replay leaves in place (fast); reload entries
+// restore the target changelog snapshot and rebuild the scene via reload-reapply (now lossless, so
+// it can resurrect entities at their original ids).
+async function applyEntry(entry: UndoEntry, dir: 'undo' | 'redo'): Promise<void> {
+  state.suppressUndo = true
+  try {
+    if (entry.kind === 'components') {
+      // undo walks ops in reverse (so a repeated key unwinds correctly); redo forward.
+      const ops = dir === 'undo' ? [...entry.ops].reverse() : entry.ops
+      for (const op of ops) await applyCell(op.entityId, op.name, dir === 'undo' ? op.before : op.after)
+      await reloadAfter()
+    } else {
+      restoreChangelog(dir === 'undo' ? entry.before : entry.after)
+      await reloadScene(true, { keepHistory: true })
+    }
+  } finally {
+    state.suppressUndo = false
+  }
+}
+
+export async function undo(): Promise<void> {
+  const entry = state.undoStack.pop()
+  if (entry === undefined) return
+  await applyEntry(entry, 'undo')
+  state.redoStack.push(entry)
+}
+
+export async function redo(): Promise<void> {
+  const entry = state.redoStack.pop()
+  if (entry === undefined) return
+  await applyEntry(entry, 'redo')
+  state.undoStack.push(entry)
 }
 
 // Sync the local frozen flag from the pinned scene's actual status (it may
@@ -364,8 +442,10 @@ export function mergeKeepingOrder(existing: unknown, value: unknown): unknown {
 // written via /set_component_raw, carrying a timestamp newer than the snapshot's so the write
 // wins LWW. Everything else goes through /set_component as JSON.
 export async function writeComponent(entityId: string, name: string, json: string): Promise<void> {
+  const before = cell(state.snapshot[entityId]?.[name]) // capture before applyLocalComponent mutates
   applyLocalComponent(entityId, name, json)
   markEdited(entityId, name, JSON.parse(json))
+  recordOp(entityId, name, before, cell(state.snapshot[entityId]?.[name]))
   if (isCustomComponent(name)) {
     const id = customComponentId(name)
     const b64 = encodeCustomComponent(name, JSON.parse(json))
@@ -449,6 +529,7 @@ export async function addComponent(entityId: string, name: string): Promise<void
     }
   }
 
+  beginTxn(`Add ${name}`)
   try {
     await writeComponent(entityId, name, json)
     await reloadAfter()
@@ -468,6 +549,7 @@ export async function addComponent(entityId: string, name: string): Promise<void
   } catch {
     /* no schema → nothing to capture */
   }
+  commitTxn()
 }
 
 // --- add entity ---
@@ -575,24 +657,44 @@ export async function createEntities(
   return ids
 }
 
+// Wrap an entity-lifecycle action (create/delete/import) as one 'reload' undo step: snapshot the
+// changelog around it (component-op recording suppressed, so it's a single entry), and let undo/redo
+// materialise it by restoring that snapshot + reload-reapply. Nested calls (already inside a wrapped
+// action or undo apply) just run, so the outermost action owns the entry.
+export async function recordEntityChange(label: string, op: () => Promise<void>): Promise<void> {
+  if (state.suppressUndo) {
+    await op()
+    return
+  }
+  const before = snapshotChangelog()
+  state.suppressUndo = true
+  try {
+    await op()
+  } finally {
+    state.suppressUndo = false
+  }
+  pushReloadEntry(label, before, snapshotChangelog())
+}
+
 // Create a single authored entity with a default Transform (parented under `parent`, 0 = scene
 // root) and a Name, then select it. Mirrors the Hub's addChild operation. An unparented entity
 // (parent 0) is then placed in front of the player and the translate tool auto-selected, so it
 // spawns in view and ready to position; a child stays at its parent's origin.
 export async function addEntity(name: string, parent: number): Promise<void> {
-  const ids = await createEntities([
-    {
-      // Full default Transform (explicit scale 1 — a partial write would leave scale 0 → invisible).
-      Transform: {
-        position: { x: 0, y: 0, z: 0 },
-        rotation: { x: 0, y: 0, z: 0, w: 1 },
-        scale: { x: 1, y: 1, z: 1 },
-        parent
-      },
-      [NAME_COMPONENT]: { value: name || 'Entity' }
-    }
-  ])
-  if (ids.length > 0) {
+  await recordEntityChange('Add entity', async () => {
+    const ids = await createEntities([
+      {
+        // Full default Transform (explicit scale 1 — a partial write would leave scale 0 → invisible).
+        Transform: {
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0, w: 1 },
+          scale: { x: 1, y: 1, z: 1 },
+          parent
+        },
+        [NAME_COMPONENT]: { value: name || 'Entity' }
+      }
+    ])
+    if (ids.length === 0) return
     const eid = String(ids[0])
     state.selected.clear()
     state.selected.add(eid)
@@ -619,17 +721,22 @@ export async function addEntity(name: string, parent: number): Promise<void> {
       )
       setActiveAction('translate')
     }
-  }
+  })
 }
 
-// Remove a component from an entity (optimistic local removal + /delete_component).
+// Remove a component from an entity (optimistic local removal + /delete_component). A single user
+// action — wraps itself as one undo step (inert while suppressed, e.g. during undo apply).
 export function deleteComponent(entityId: string, name: string): void {
+  beginTxn(`Delete ${name}`)
+  const before = cell(state.snapshot[entityId]?.[name])
   const entry = state.snapshot[entityId]
   if (entry !== undefined) delete entry[name]
   const key = componentKey(entityId, name)
   state.expandedComponents.delete(key)
   clearComponentEdits(key)
   markComponentDeleted(entityId, name)
+  recordOp(entityId, name, before, ABSENT)
+  commitTxn()
   BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) => {
     console.error('delete_component failed:', name, e)
   })
@@ -652,6 +759,7 @@ export async function setComponentValue(
     return
   }
 
+  beginTxn(`Edit ${name}`)
   try {
     await writeComponent(entityId, name, compact)
     state.editStatus.set(key, '✓ set')
@@ -660,6 +768,7 @@ export async function setComponentValue(
   } catch (e) {
     state.editStatus.set(key, String(e))
   }
+  commitTxn()
 }
 
 // --- save ---
@@ -761,6 +870,7 @@ async function writeComposite(
     console.log(`[save] ${path}`)
     state.savedBaseline = newBaseline
     resetSaveChangelog()
+    clearUndoHistory() // the save becomes the new baseline; undoing across it would be inconsistent
     state.saveDialog = null
     state.saveStatus =
       skipped.length > 0 ? `saved → ${path} (skipped: ${skipped.join(', ')})` : `saved → ${path}`
@@ -778,10 +888,12 @@ export function fireTransform(entityId: string, json: string): void {
   // Gizmo drags write the Transform directly (not via writeComponent), so record the edit in the
   // changelog here too — otherwise the save diff treats a gizmo move as runtime churn. Fired every
   // frame of the drag; the last call holds the committed pose.
-  markEdited(entityId, 'Transform', JSON.parse(json))
-  BevyApi.consoleCommand('set_component', [entityId, 'Transform', json]).catch(
-    () => {}
-  )
+  const value = JSON.parse(json)
+  // Record into the drag's undo transaction (opened in startGizmoDrag): recordOp keeps the first
+  // frame's `before` (pre-drag) and the latest `after`, so the whole drag is one op per entity.
+  recordOp(entityId, 'Transform', cell(state.snapshot[entityId]?.Transform), cell(value))
+  markEdited(entityId, 'Transform', value)
+  BevyApi.consoleCommand('set_component', [entityId, 'Transform', json]).catch(() => {})
 }
 
 // Re-sync the snapshot after a drag ends (settle so the tree reflects the move).
@@ -851,43 +963,49 @@ export function childIdsOf(id: string): string[] {
 // entity — use deleteEntityReparent to keep them, or recursive to remove them.
 export async function deleteEntity(id: string): Promise<void> {
   state.deleteConfirm = null
-  try {
-    await writeDelete(id, false)
-  } catch (e) {
-    console.error('delete_entity failed:', e)
-  }
-  await reloadAfter([id])
+  await recordEntityChange('Delete entity', async () => {
+    try {
+      await writeDelete(id, false)
+    } catch (e) {
+      console.error('delete_entity failed:', e)
+    }
+    await reloadAfter([id])
+  })
 }
 
 export async function deleteEntityRecursive(id: string): Promise<void> {
   state.deleteConfirm = null
-  try {
-    await writeDelete(id, true)
-  } catch (e) {
-    console.error('delete_entity -r failed:', e)
-  }
-  await reloadAfter([id])
+  await recordEntityChange('Delete entity (recursive)', async () => {
+    try {
+      await writeDelete(id, true)
+    } catch (e) {
+      console.error('delete_entity -r failed:', e)
+    }
+    await reloadAfter([id])
+  })
 }
 
 // Reparent each direct child to the entity's parent (preserving world placement),
 // then delete the entity.
 export async function deleteEntityReparent(id: string): Promise<void> {
   state.deleteConfirm = null
-  const parentT = readTransform(id)
-  for (const childId of directChildren(id)) {
-    const json = composeIntoGrandparent(parentT, readTransform(childId), parentT.parent)
-    try {
-      await writeComponent(childId, 'Transform', json)
-    } catch (e) {
-      console.error('reparent child failed:', childId, e)
+  await recordEntityChange('Delete entity (reparent children)', async () => {
+    const parentT = readTransform(id)
+    for (const childId of directChildren(id)) {
+      const json = composeIntoGrandparent(parentT, readTransform(childId), parentT.parent)
+      try {
+        await writeComponent(childId, 'Transform', json)
+      } catch (e) {
+        console.error('reparent child failed:', childId, e)
+      }
     }
-  }
-  try {
-    await writeDelete(id, false)
-  } catch (e) {
-    console.error('delete_entity failed:', e)
-  }
-  await reloadAfter([id])
+    try {
+      await writeDelete(id, false)
+    } catch (e) {
+      console.error('delete_entity failed:', e)
+    }
+    await reloadAfter([id])
+  })
 }
 
 // Whether `ancestor` is an ancestor of `node` in the snapshot hierarchy.
@@ -916,6 +1034,7 @@ export async function reparentSelectionToActive(): Promise<void> {
       String(readTransform(c).parent) !== active
   )
 
+  beginTxn('Reparent')
   for (const c of targets) {
     const local = localRelativeTo(snap, c, active)
     const json = JSON.stringify({ ...local, parent: Number(active) })
@@ -926,6 +1045,7 @@ export async function reparentSelectionToActive(): Promise<void> {
     }
   }
   await reloadAfter()
+  commitTxn()
 }
 
 // Detach each selected entity to the scene root (parent 0), preserving world
@@ -935,6 +1055,7 @@ export async function reparentSelectionToActive(): Promise<void> {
 export async function clearParentOfSelection(): Promise<void> {
   const snap = state.snapshot
   const targets = [...state.selected].filter((id) => (readTransform(id).parent ?? 0) !== 0)
+  beginTxn('Clear parent')
   for (const id of targets) {
     const local = localRelativeTo(snap, id, '0')
     const json = JSON.stringify({ ...local, parent: 0 })
@@ -945,6 +1066,7 @@ export async function clearParentOfSelection(): Promise<void> {
     }
   }
   await reloadAfter()
+  commitTxn()
 }
 
 // Whether any selected entity currently has a non-root parent.

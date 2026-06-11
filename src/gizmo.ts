@@ -12,7 +12,7 @@ import {
   type Entity
 } from '@dcl/sdk/ecs'
 import { Vector3, Quaternion, Color4 } from '@dcl/sdk/math'
-import { state, topLevelSelected, parentOf, effectiveMode } from './state'
+import { state, topLevelSelected, parentOf, effectiveMode, beginTxn, commitTxn } from './state'
 import {
   worldTransformOf,
   worldToLocalPosition,
@@ -816,6 +816,8 @@ export function startGizmoDrag(): void {
   groupStart = captureGroup()
   liveStartWorld = computeWorldPositions(state.snapshot)
   state.gizmoDragging = true
+  // One undo step for the whole drag — per-frame fireTransform calls dedupe into one op per entity.
+  beginTxn(effectiveMode())
 }
 
 export function endGizmoDrag(): void {
@@ -828,6 +830,8 @@ export function endGizmoDrag(): void {
   pendingTime = 0
   lastDragWorld = null
   lastDragRot = null
+  // All per-frame writes are in; close the drag's undo step (drops it if nothing moved).
+  commitTxn()
   syncAfterDrag().catch(console.error)
 }
 

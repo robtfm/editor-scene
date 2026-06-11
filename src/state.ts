@@ -1,6 +1,7 @@
 import { engine } from '@dcl/sdk/ecs'
 import { type LiveSceneInfo } from './bevy-api/interface'
 import { type DiffRow, type DiffSource } from './save-diff'
+import { type Cell, cellsEqual } from './diff-util'
 
 // crdt_snapshot shape: { "<entityId>": { "<ComponentName>": value, ... }, ... }
 export type Snapshot = Record<string, Record<string, unknown>>
@@ -162,7 +163,18 @@ export const state = {
   // would default to revert. Null until the first save; reset when the editor session reloads.
   savedBaseline: null as Snapshot | null,
   // transient status line for the save action.
-  saveStatus: ''
+  saveStatus: '',
+
+  // --- undo/redo ---
+  // Stacks of user-action entries. A 'components' entry replays in place (before/after per leaf); a
+  // 'reload' entry (entity create/delete/import) is materialised by restoring its changelog snapshot
+  // and reload-reapplying. See diff-util + the helpers below.
+  undoStack: [] as UndoEntry[],
+  redoStack: [] as UndoEntry[],
+  // the open component transaction (ops accumulate here until commitTxn), or null.
+  openTxn: null as { label: string; ops: UndoOp[] } | null,
+  // re-entrancy guard: while true, recording is suppressed (set during undo/redo apply and reapply).
+  suppressUndo: false
 }
 
 // Record an editor edit in the changelog (so save knows it was us, not runtime churn), capturing
@@ -191,6 +203,89 @@ export function resetSaveChangelog(): void {
   state.deletedComponents.clear()
   state.deletedEntities.clear()
   state.editorValues.clear()
+}
+
+// --- undo/redo ---
+
+// One component leaf's before/after, captured from the logical snapshot at write time.
+export type UndoOp = { entityId: string; name: string; before: Cell; after: Cell }
+
+// A clone of the four save-changelog structures — the editor's full intended-state delta. A 'reload'
+// undo entry stores one before and after; restoring one + reload-reapply reconstructs that state.
+export type Changelog = {
+  edited: Set<string>
+  deletedC: Set<string>
+  deletedE: Set<string>
+  values: Map<string, unknown>
+}
+
+export type UndoEntry =
+  | { kind: 'components'; label: string; ops: UndoOp[] }
+  | { kind: 'reload'; label: string; before: Changelog; after: Changelog }
+
+const MAX_UNDO_DEPTH = 50
+
+function pushUndo(entry: UndoEntry): void {
+  state.undoStack.push(entry)
+  if (state.undoStack.length > MAX_UNDO_DEPTH) state.undoStack.shift()
+  state.redoStack.length = 0 // a new action invalidates the redo stack
+}
+
+// Open a component transaction; subsequent recordOp calls accumulate into it until commitTxn. No-op
+// while suppressed (undo/redo apply, reapply), so replayed writes don't open stray transactions.
+export function beginTxn(label: string): void {
+  if (state.suppressUndo) return
+  state.openTxn = { label, ops: [] }
+}
+
+// Record one component leaf's before/after into the open transaction. No-op when none is open or
+// recording is suppressed. `before` must be captured by the caller *before* mutating the snapshot.
+export function recordOp(entityId: string, name: string, before: Cell, after: Cell): void {
+  const txn = state.openTxn
+  if (txn === null || state.suppressUndo) return
+  const existing = txn.ops.find((o) => o.entityId === entityId && o.name === name)
+  if (existing !== undefined)
+    existing.after = after // repeated key (gizmo per-frame, revisited write): keep first before
+  else txn.ops.push({ entityId, name, before, after })
+}
+
+// Close the open transaction and push it as one undo step, dropping no-op ops (before==after) and
+// empty entries (e.g. a drag that didn't move).
+export function commitTxn(): void {
+  const txn = state.openTxn
+  state.openTxn = null
+  if (txn === null) return
+  const ops = txn.ops.filter((o) => !cellsEqual(o.before, o.after))
+  if (ops.length > 0) pushUndo({ kind: 'components', label: txn.label, ops })
+}
+
+export function snapshotChangelog(): Changelog {
+  return {
+    edited: new Set(state.editedComponents),
+    deletedC: new Set(state.deletedComponents),
+    deletedE: new Set(state.deletedEntities),
+    values: new Map(state.editorValues)
+  }
+}
+
+export function restoreChangelog(c: Changelog): void {
+  state.editedComponents = new Set(c.edited)
+  state.deletedComponents = new Set(c.deletedC)
+  state.deletedEntities = new Set(c.deletedE)
+  state.editorValues = new Map(c.values)
+}
+
+// Push a 'reload' undo step for an entity-lifecycle action (create/delete/import).
+export function pushReloadEntry(label: string, before: Changelog, after: Changelog): void {
+  pushUndo({ kind: 'reload', label, before, after })
+}
+
+// Drop all undo/redo state — used when the snapshot baseline the entries reference is replaced
+// (manual reload/resync), so no entry can apply against a stale baseline.
+export function clearUndoHistory(): void {
+  state.undoStack.length = 0
+  state.redoStack.length = 0
+  state.openTxn = null
 }
 
 // The engine creates the scrollable link with scroll_position = None and only

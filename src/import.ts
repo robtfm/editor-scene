@@ -8,7 +8,13 @@
 import { BevyApi } from './bevy-api'
 import { state, selectEntityInTree, setActiveAction, componentKey, type Snapshot } from './state'
 import { editorNameForComposite, componentIdForName } from './composite'
-import { allocateNamedEntities, writeComponent, reloadSnapshot, setComponentValue } from './inspector'
+import {
+  allocateNamedEntities,
+  writeComponent,
+  reloadSnapshot,
+  setComponentValue,
+  recordEntityChange
+} from './inspector'
 import { playerSpawnPosition } from './spawn'
 import { sleep } from './utils'
 
@@ -130,7 +136,12 @@ function currentMaxNetworkId(snapshot: Snapshot): number {
 
 // Import catalog asset `assetId` into the current scene, parented under `parent` (0 = scene root),
 // and select its root. Requires fetchCatalog() to have run (so the engine cached the catalog).
+// Recorded as one 'reload' undo step (it creates entities) — undo rebuilds the scene without them.
 export async function importAsset(assetId: string, parent = 0, assetName = 'Asset'): Promise<void> {
+  await recordEntityChange('Import asset', () => importAssetInner(assetId, parent, assetName))
+}
+
+async function importAssetInner(assetId: string, parent: number, assetName: string): Promise<void> {
   const reply = await BevyApi.consoleCommand('init_asset', [assetId])
   const parsed = JSON.parse(reply) as {
     baseDir: string

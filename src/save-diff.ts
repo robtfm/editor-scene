@@ -9,11 +9,12 @@
 
 import { state, type Snapshot } from './state'
 import { isAuthoredEntity, isSavableComponent } from './composite'
+import { type Cell, ABSENT, cell, cellsEqual } from './diff-util'
+
+export type { Cell } from './diff-util'
+export { deepEqual } from './diff-util'
 
 export type DiffSource = 'initial' | 'editor' | 'live'
-
-// A value at one source, or absent (component not present / deleted).
-export type Cell = { present: boolean; value?: unknown }
 
 export type DiffRow = {
   entityId: string
@@ -21,32 +22,6 @@ export type DiffRow = {
   cells: Record<DiffSource, Cell>
   // distinct sources to offer (collapsed on equality), in initial → editor → live order.
   options: DiffSource[]
-}
-
-const ABSENT: Cell = { present: false }
-const cell = (v: unknown): Cell => (v === undefined ? ABSENT : { present: true, value: v })
-
-export function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  // Numbers compare modulo float32 rounding: the editor writes float64, but the engine stores
-  // component floats (Transform position/rotation/scale, colours, …) as f32 and re-emits the
-  // rounded value — so a just-saved value reloads ~1 ULP off its source. Real edits exceed f32 ULP.
-  if (typeof a === 'number' && typeof b === 'number') return Math.fround(a) === Math.fround(b)
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
-    return a.every((v, i) => deepEqual(v, b[i]))
-  }
-  const ao = a as Record<string, unknown>
-  const bo = b as Record<string, unknown>
-  const keys = Object.keys(ao)
-  if (keys.length !== Object.keys(bo).length) return false
-  return keys.every((k) => k in bo && deepEqual(ao[k], bo[k]))
-}
-
-function cellsEqual(a: Cell, b: Cell): boolean {
-  if (a.present !== b.present) return false
-  return !a.present || deepEqual(a.value, b.value)
 }
 
 // The editor source for a (entity, component): absent if deleted, the written value if edited,
@@ -128,15 +103,17 @@ export function computeSaveDiff(initial: Snapshot, live: Snapshot): DiffRow[] {
   return rows
 }
 
-// Authored entities the editor created this session that aren't on disk: present in `live` and
-// editor-touched, but absent from the baseline `initial` (= savedBaseline ?? /crdt_initial). These
-// can't survive a scene reload (they'd need reinstantiation at their original ids), so the reload
-// warns about them. Same baseline + editor-touched notion the save diff scopes by.
-export function addedAuthoredEntities(initial: Snapshot, live: Snapshot): string[] {
+// Authored entities the editor created this session that aren't on disk: editor-touched and not
+// deleted, but absent from the baseline `initial` (= savedBaseline ?? /crdt_initial). Reapply must
+// reinstantiate these at their original ids. Derived from the changelog (not the live snapshot) so
+// it's correct even when an entity is currently deleted-then-restored mid undo/redo.
+export function addedAuthoredEntities(initial: Snapshot): string[] {
   const ids = new Set<string>()
   for (const key of state.editedComponents) {
     const id = splitKey(key)[0]
-    if (id in live && !(id in initial) && isAuthoredEntity(Number(id))) ids.add(id)
+    if (!state.deletedEntities.has(id) && !(id in initial) && isAuthoredEntity(Number(id))) {
+      ids.add(id)
+    }
   }
   return [...ids]
 }
