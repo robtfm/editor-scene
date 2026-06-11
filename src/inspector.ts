@@ -38,6 +38,7 @@ import {
   encodeCustomComponent,
   createCustomDefault,
   stringToBase64,
+  entityDisplay,
   NAME_COMPONENT
 } from './custom-components'
 import { buildComposite, unknownComponentNames } from './composite'
@@ -145,6 +146,8 @@ export async function reloadScene(
   resetOverlays()
   resetHighlightSync()
 
+  const prevBusy = state.busy
+  state.busy = true
   state.status = 'loading-snapshot'
   state.saveStatus = 'reloading…'
   try {
@@ -152,6 +155,7 @@ export async function reloadScene(
   } catch (e) {
     console.error('reload failed:', e)
     state.saveStatus = `reload failed: ${String(e)}`
+    state.busy = prevBusy
     return
   }
 
@@ -188,6 +192,7 @@ export async function reloadScene(
 
   if (wasFrozen) await pauseScene()
   if (!opts.keepHistory) clearUndoHistory()
+  state.busy = prevBusy
   state.saveStatus = status
 }
 
@@ -302,6 +307,8 @@ async function applyCell(entityId: string, name: string, c: Cell): Promise<void>
 // restore the target changelog snapshot and rebuild the scene via reload-reapply (now lossless, so
 // it can resurrect entities at their original ids).
 async function applyEntry(entry: UndoEntry, dir: 'undo' | 'redo'): Promise<void> {
+  const prevBusy = state.busy
+  state.busy = true
   state.suppressUndo = true
   try {
     if (entry.kind === 'components') {
@@ -315,6 +322,7 @@ async function applyEntry(entry: UndoEntry, dir: 'undo' | 'redo'): Promise<void>
     }
   } finally {
     state.suppressUndo = false
+    state.busy = prevBusy
   }
 }
 
@@ -661,19 +669,23 @@ export async function createEntities(
 // changelog around it (component-op recording suppressed, so it's a single entry), and let undo/redo
 // materialise it by restoring that snapshot + reload-reapply. Nested calls (already inside a wrapped
 // action or undo apply) just run, so the outermost action owns the entry.
-export async function recordEntityChange(label: string, op: () => Promise<void>): Promise<void> {
+export async function recordEntityChange(
+  label: string,
+  op: () => Promise<string | void>
+): Promise<void> {
   if (state.suppressUndo) {
     await op()
     return
   }
   const before = snapshotChangelog()
   state.suppressUndo = true
+  let target: string | void
   try {
-    await op()
+    target = await op()
   } finally {
     state.suppressUndo = false
   }
-  pushReloadEntry(label, before, snapshotChangelog())
+  pushReloadEntry(label, typeof target === 'string' ? target : '', before, snapshotChangelog())
 }
 
 // Create a single authored entity with a default Transform and a Name, then select it. Mirrors the
@@ -681,7 +693,7 @@ export async function recordEntityChange(label: string, op: () => Promise<void>)
 // same world point, converted to `parent`'s local frame) and the translate tool auto-selected, so it
 // spawns in view and ready to position.
 export async function addEntity(name: string, parent: number): Promise<void> {
-  await recordEntityChange('Add entity', async () => {
+  await recordEntityChange('Create', async () => {
     const ids = await createEntities([
       {
         // Full default Transform (explicit scale 1 — a partial write would leave scale 0 → invisible).
@@ -719,13 +731,14 @@ export async function addEntity(name: string, parent: number): Promise<void> {
       })
     )
     setActiveAction('translate')
+    return entityDisplay(state.snapshot, eid)
   })
 }
 
 // Remove a component from an entity (optimistic local removal + /delete_component). A single user
 // action — wraps itself as one undo step (inert while suppressed, e.g. during undo apply).
 export function deleteComponent(entityId: string, name: string): void {
-  beginTxn(`Delete ${name}`)
+  beginTxn(`Remove ${name}`)
   const before = cell(state.snapshot[entityId]?.[name])
   const entry = state.snapshot[entityId]
   if (entry !== undefined) delete entry[name]
@@ -757,7 +770,7 @@ export async function setComponentValue(
     return
   }
 
-  beginTxn(`Edit ${name}`)
+  beginTxn(`Update ${name}`)
   try {
     await writeComponent(entityId, name, compact)
     state.editStatus.set(key, '✓ set')
@@ -961,25 +974,29 @@ export function childIdsOf(id: string): string[] {
 // entity — use deleteEntityReparent to keep them, or recursive to remove them.
 export async function deleteEntity(id: string): Promise<void> {
   state.deleteConfirm = null
-  await recordEntityChange('Delete entity', async () => {
+  await recordEntityChange('Delete', async () => {
+    const target = entityDisplay(state.snapshot, id)
     try {
       await writeDelete(id, false)
     } catch (e) {
       console.error('delete_entity failed:', e)
     }
     await reloadAfter([id])
+    return target
   })
 }
 
 export async function deleteEntityRecursive(id: string): Promise<void> {
   state.deleteConfirm = null
-  await recordEntityChange('Delete entity (recursive)', async () => {
+  await recordEntityChange('Delete (with children)', async () => {
+    const target = entityDisplay(state.snapshot, id)
     try {
       await writeDelete(id, true)
     } catch (e) {
       console.error('delete_entity -r failed:', e)
     }
     await reloadAfter([id])
+    return target
   })
 }
 
@@ -987,7 +1004,8 @@ export async function deleteEntityRecursive(id: string): Promise<void> {
 // then delete the entity.
 export async function deleteEntityReparent(id: string): Promise<void> {
   state.deleteConfirm = null
-  await recordEntityChange('Delete entity (reparent children)', async () => {
+  await recordEntityChange('Delete (keep children)', async () => {
+    const target = entityDisplay(state.snapshot, id)
     const parentT = readTransform(id)
     for (const childId of directChildren(id)) {
       const json = composeIntoGrandparent(parentT, readTransform(childId), parentT.parent)
@@ -1003,6 +1021,7 @@ export async function deleteEntityReparent(id: string): Promise<void> {
       console.error('delete_entity failed:', e)
     }
     await reloadAfter([id])
+    return target
   })
 }
 

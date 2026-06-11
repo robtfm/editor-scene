@@ -223,3 +223,8 @@ export function entityName(snapshot: Snapshot, id: string): string | undefined {
   const name = snapshot[id]?.[NAME_COMPONENT] as { value?: string } | undefined
   return typeof name?.value === 'string' && name.value !== '' ? name.value : undefined
 }
+
+// "Name (id)" — a short display string for an entity, falling back to "Entity (id)" when unnamed.
+export function entityDisplay(snapshot: Snapshot, id: string): string {
+  return `${entityName(snapshot, id) ?? 'Entity'} (${id})`
+}

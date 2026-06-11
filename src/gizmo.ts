@@ -817,7 +817,7 @@ export function startGizmoDrag(): void {
   liveStartWorld = computeWorldPositions(state.snapshot)
   state.gizmoDragging = true
   // One undo step for the whole drag — per-frame fireTransform calls dedupe into one op per entity.
-  beginTxn(effectiveMode())
+  beginTxn('Update Transform')
 }
 
 export function endGizmoDrag(): void {

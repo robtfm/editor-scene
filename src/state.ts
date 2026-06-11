@@ -174,7 +174,12 @@ export const state = {
   // the open component transaction (ops accumulate here until commitTxn), or null.
   openTxn: null as { label: string; ops: UndoOp[] } | null,
   // re-entrancy guard: while true, recording is suppressed (set during undo/redo apply and reapply).
-  suppressUndo: false
+  suppressUndo: false,
+
+  // true while a long op (reload-reapply, undo/redo settle) is in flight — drives the busy spinner.
+  busy: false,
+  // which history button is hovered ('undo'/'redo'), for the next-action tooltip; null = none.
+  hoveredHistory: null as 'undo' | 'redo' | null
 }
 
 // Record an editor edit in the changelog (so save knows it was us, not runtime churn), capturing
@@ -221,7 +226,7 @@ export type Changelog = {
 
 export type UndoEntry =
   | { kind: 'components'; label: string; ops: UndoOp[] }
-  | { kind: 'reload'; label: string; before: Changelog; after: Changelog }
+  | { kind: 'reload'; label: string; target: string; before: Changelog; after: Changelog }
 
 const MAX_UNDO_DEPTH = 50
 
@@ -275,9 +280,15 @@ export function restoreChangelog(c: Changelog): void {
   state.editorValues = new Map(c.values)
 }
 
-// Push a 'reload' undo step for an entity-lifecycle action (create/delete/import).
-export function pushReloadEntry(label: string, before: Changelog, after: Changelog): void {
-  pushUndo({ kind: 'reload', label, before, after })
+// Push a 'reload' undo step for an entity-lifecycle action (create/delete/import). `target` is a
+// display string for the affected entity, captured while it still exists.
+export function pushReloadEntry(
+  label: string,
+  target: string,
+  before: Changelog,
+  after: Changelog
+): void {
+  pushUndo({ kind: 'reload', label, target, before, after })
 }
 
 // Drop all undo/redo state — used when the snapshot baseline the entries reference is replaced

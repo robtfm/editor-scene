@@ -11,6 +11,7 @@ import { startHighlightSync } from './highlight'
 import { setupMeshSelect } from './mesh-select'
 import { setupInteract } from './interact'
 import { loadShortcuts } from './shortcuts'
+import { startBusySpinner } from './busy'
 
 export function main(): void {
   const _log = console.log
@@ -27,6 +28,7 @@ export function main(): void {
   startHighlightSync()
   setupMeshSelect()
   setupInteract()
+  startBusySpinner()
   loadShortcuts().catch(console.error)
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 

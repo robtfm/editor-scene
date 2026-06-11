@@ -26,7 +26,8 @@ import {
   valueJson,
   buildForest,
   type ComponentKey,
-  type Forest
+  type Forest,
+  type UndoEntry
 } from './state'
 import { overlayUi } from './overlay'
 import { isWorldScaleNonUniform } from './world-pos'
@@ -91,7 +92,8 @@ import {
   type ComponentSchema,
   type SchemaNode
 } from './schema'
-import { entityName, isCustomComponent, customComponentNames } from './custom-components'
+import { entityName, entityDisplay, isCustomComponent, customComponentNames } from './custom-components'
+import { spinnerGlyph } from './busy'
 import { shortcutLabels } from './shortcuts'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
@@ -1735,6 +1737,52 @@ function addAssetButton(): ReactEcs.JSX.Element {
   )
 }
 
+// Action + affected entity for an undo/redo entry. Component entries derive the entity from their
+// ops (it still exists at undo time); reload entries carry a target captured when it existed.
+function describeEntry(entry: UndoEntry): { action: string; target: string } {
+  if (entry.kind === 'reload') return { action: entry.label, target: entry.target }
+  const ents = [...new Set(entry.ops.map((o) => o.entityId))]
+  const target =
+    ents.length === 1 ? entityDisplay(state.snapshot, ents[0]) : `${ents.length} entities`
+  return { action: entry.label, target }
+}
+
+// Floating tooltip next to the Undo/Redo buttons describing what the hovered button will do.
+function historyTooltip(): ReactEcs.JSX.Element | null {
+  const which = state.hoveredHistory
+  if (which === null) return null
+  const stack = which === 'undo' ? state.undoStack : state.redoStack
+  if (stack.length === 0) return null
+  const { action, target } = describeEntry(stack[stack.length - 1])
+  const verb = which === 'undo' ? 'Undo' : 'Redo'
+  return (
+    <UiEntity
+      uiTransform={{
+        positionType: 'absolute',
+        position: { top: 86, left: 6 },
+        width: 250,
+        flexDirection: 'column',
+        padding: { left: 8, right: 8, top: 4, bottom: 4 }
+      }}
+      uiBackground={{ color: HEADER_BG }}
+    >
+      <UiEntity
+        uiTransform={{ width: '100%', height: 18 }}
+        uiText={{
+          value: `${verb} · ${action}`,
+          fontSize: FS - 2,
+          color: ACCENT,
+          textAlign: 'middle-left'
+        }}
+      />
+      <UiEntity
+        uiTransform={{ width: '100%', height: 18 }}
+        uiText={{ value: target, fontSize: FS - 2, color: MUTED, textAlign: 'middle-left' }}
+      />
+    </UiEntity>
+  )
+}
+
 const NODE_LABEL: Record<string, string> = {
   always: 'Nodes: All',
   selected: 'Nodes: Selected',
@@ -3258,7 +3306,9 @@ export function inspectorUi(): ReactEcs.JSX.Element {
         <UiEntity
           uiTransform={{ width: '100%', height: 20, alignItems: 'center' }}
           uiText={{
-            value: state.saveStatus !== '' ? state.saveStatus : statusText(),
+            value:
+              (state.busy ? `${spinnerGlyph()} ` : '') +
+              (state.saveStatus !== '' ? state.saveStatus : statusText()),
             fontSize: FS - 2,
             color: MUTED,
             textAlign: 'middle-left'
@@ -3283,6 +3333,12 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           onMouseDown={() => {
             if (canUndo()) undo().catch(console.error)
           }}
+          onMouseEnter={() => {
+            state.hoveredHistory = 'undo'
+          }}
+          onMouseLeave={() => {
+            if (state.hoveredHistory === 'undo') state.hoveredHistory = null
+          }}
         />
         <UiEntity
           uiTransform={{
@@ -3296,6 +3352,12 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           uiText={{ value: 'Redo', fontSize: FS - 1, color: canRedo() ? TEXT : MUTED }}
           onMouseDown={() => {
             if (canRedo()) redo().catch(console.error)
+          }}
+          onMouseEnter={() => {
+            state.hoveredHistory = 'redo'
+          }}
+          onMouseLeave={() => {
+            if (state.hoveredHistory === 'redo') state.hoveredHistory = null
           }}
         />
         <UiEntity
@@ -3383,6 +3445,9 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       ) : (
         []
       )}
+
+      {/* Undo/Redo hover tooltip (describes the next action) */}
+      {historyTooltip() ?? []}
       </UiEntity>
 
       {componentWindowPanel() ?? []}

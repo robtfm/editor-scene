@@ -16,6 +16,7 @@ import {
   recordEntityChange
 } from './inspector'
 import { playerSpawnPosition } from './spawn'
+import { entityDisplay } from './custom-components'
 import { sleep } from './utils'
 
 const COMPOSITE_NAME = 'core-schema::Name'
@@ -138,7 +139,13 @@ function currentMaxNetworkId(snapshot: Snapshot): number {
 // and select its root. Requires fetchCatalog() to have run (so the engine cached the catalog).
 // Recorded as one 'reload' undo step (it creates entities) — undo rebuilds the scene without them.
 export async function importAsset(assetId: string, parent = 0, assetName = 'Asset'): Promise<void> {
-  await recordEntityChange('Import asset', () => importAssetInner(assetId, parent, assetName))
+  await recordEntityChange('Import', async () => {
+    await importAssetInner(assetId, parent, assetName)
+    // The root was just selected; label the undo step with it (name + id).
+    return state.activeEntity !== null
+      ? entityDisplay(state.snapshot, state.activeEntity)
+      : assetName
+  })
 }
 
 async function importAssetInner(assetId: string, parent: number, assetName: string): Promise<void> {
