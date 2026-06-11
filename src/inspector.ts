@@ -42,7 +42,12 @@ import {
   entityDisplay,
   NAME_COMPONENT
 } from './custom-components'
-import { buildComposite, unknownComponentNames } from './composite'
+import {
+  buildComposite,
+  unknownComponentNames,
+  isSavableComponent,
+  isAuthoredEntity
+} from './composite'
 import {
   computeSaveDiff,
   buildAuthoredFromSelection,
@@ -733,6 +738,73 @@ export async function addEntity(name: string, parent: number): Promise<void> {
     )
     setActiveAction('translate')
     return entityDisplay(state.snapshot, eid)
+  })
+}
+
+// Duplicate the selected entities and their descendants: allocate fresh ids, copy each one's savable
+// components onto its copy (Transform.parent remapped within the duplicated set; a root keeps its
+// original parent), then select the copies and switch to translate. Cross-entity references other
+// than Transform.parent aren't remapped (a known limit, e.g. smart-item triggers). One undo step.
+export async function duplicateSelection(): Promise<void> {
+  const seeds = [...state.selected].filter(
+    (id) => isAuthoredEntity(Number(id)) && id in state.snapshot
+  )
+  if (seeds.length === 0) return
+  await recordEntityChange('Duplicate', async () => {
+    // Gather the forest: seeds + all descendants.
+    const set = new Set<string>()
+    const stack = [...seeds]
+    while (stack.length > 0) {
+      const cur = stack.pop() as string
+      if (set.has(cur)) continue
+      set.add(cur)
+      for (const c of directChildren(cur)) stack.push(c)
+    }
+    const ordered = [...set].sort((a, b) => Number(a) - Number(b))
+
+    // Allocate a fresh id per entity, instantiated with its Name.
+    const names = ordered.map((id) => ({
+      value: (state.snapshot[id]?.[NAME_COMPONENT] as { value?: string } | undefined)?.value ?? 'Entity'
+    }))
+    const allocated = await allocateNamedEntities(names)
+    const idMap = new Map<string, number>()
+    ordered.forEach((old, i) => {
+      const n = allocated[i]
+      if (n != null) idMap.set(old, n)
+    })
+
+    // Write each copy's savable components, remapping Transform.parent into the duplicated set.
+    for (const old of ordered) {
+      const newId = idMap.get(old)
+      if (newId === undefined) continue
+      const comps = state.snapshot[old] ?? {}
+      for (const [name, value] of Object.entries(comps)) {
+        if (name === NAME_COMPONENT) continue // already instantiated
+        if (!isSavableComponent(name) || name === 'inspector::Nodes') continue
+        let v: unknown = value
+        if (name === 'Transform') {
+          const t = value as { parent?: number }
+          v = { ...t, parent: idMap.get(String(t.parent ?? 0)) ?? t.parent ?? 0 }
+        }
+        await writeComponent(String(newId), name, JSON.stringify(v)).catch((e) =>
+          console.error('duplicate write failed:', name, newId, e)
+        )
+      }
+    }
+    await reloadAfter()
+
+    // Select the copies of the originally-selected entities.
+    const newSel = seeds.map((id) => idMap.get(id)).filter((n): n is number => n != null).map(String)
+    if (newSel.length > 0) {
+      state.selected = new Set(newSel)
+      const remappedActive = state.activeEntity !== null ? idMap.get(state.activeEntity) : undefined
+      state.activeEntity = remappedActive != null ? String(remappedActive) : newSel[0]
+      selectEntityInTree(state.snapshot, state.activeEntity)
+      setActiveAction('translate')
+    }
+    return idMap.size > 1
+      ? `${idMap.size} entities`
+      : entityDisplay(state.snapshot, newSel[0] ?? String(seeds[0]))
   })
 }
 

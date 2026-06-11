@@ -54,6 +54,7 @@ import {
   childIdsOf,
   addComponent,
   addEntity,
+  duplicateSelection,
   deleteComponent,
   saveComposite,
   isLocalScene,
@@ -1800,6 +1801,29 @@ function historyTooltip(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Duplicate the selected (authored) entities and their subtrees. Live when something authored is
+// selected.
+function duplicateButton(): ReactEcs.JSX.Element {
+  const enabled = [...state.selected].some((id) => Number(id) >= 512)
+  return (
+    <UiEntity
+      key="duplicate-button"
+      uiTransform={{
+        width: 90,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: enabled ? TOGGLE_ON : BUTTON_BG }}
+      uiText={{ value: 'Duplicate', fontSize: FS - 2, color: enabled ? TEXT : MUTED }}
+      onMouseDown={() => {
+        if (enabled) duplicateSelection().catch(console.error)
+      }}
+    />
+  )
+}
+
 const NODE_LABEL: Record<string, string> = {
   always: 'Nodes: All',
   selected: 'Nodes: Selected',
@@ -2018,7 +2042,11 @@ function controlPanel(): ReactEcs.JSX.Element {
       >
         {toolbarSection('s-tools', ACTIONS.map(actionButton), toolContext())}
         {toolbarDivider('div-1')}
-        {toolbarSection('s-parent', [addEntityButton(), addAssetButton()], [parentButton(), clearParentButton()])}
+        {toolbarSection(
+          's-parent',
+          [addEntityButton(), addAssetButton(), duplicateButton()],
+          [parentButton(), clearParentButton()]
+        )}
         {toolbarDivider('div-2')}
         {toolbarSection('s-view', [nodeDisplayButton(), linksButton()], [])}
         {toolbarDivider('div-3')}
