@@ -1460,7 +1460,7 @@ function treeBody(): ReactEcs.JSX.Element[] {
 // Select (Tab) first, then the numbered tools in shortcut order (keys 1-4).
 const ACTIONS: Array<{ id: string; label: string }> = [
   { id: 'select', label: 'Select' },
-  { id: 'interact', label: 'Interact' },
+  { id: 'interact', label: 'Play' },
   { id: 'translate', label: 'Translate' },
   { id: 'rotate', label: 'Rotate' },
   { id: 'scale', label: 'Scale' }

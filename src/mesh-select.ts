@@ -127,7 +127,14 @@ function reconcileCollider(
   const key = `${id}:${name}`
   const overlaid = isOverlaid(originals, id, name)
   if (live) {
-    if (overlaid) clearOverlay(id, name)
+    if (overlaid) {
+      clearOverlay(id, name)
+      // Restoring the real gltf mask reloads it, dropping the outline off the new meshes — same as
+      // the apply path. Re-tag, else the engine's root-level highlight diff (selection unchanged)
+      // never re-applies it and the entity loses its outline *and* shadows the scene's hover
+      // showHighlight (they share one MeshTag bit). [Real fix is engine-side — see refreshHighlight.]
+      if (name === GLTF) refreshHighlight()
+    }
     collStrip.delete(key)
     return
   }
