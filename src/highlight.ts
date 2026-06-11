@@ -19,6 +19,14 @@ export function refreshHighlight(): void {
   refreshIn = REFRESH_SETTLE
 }
 
+// Forget what was last sent so the next tick re-pushes the highlight — used on scene reload, when
+// the engine's outline tags are wiped with the old scene (and the selection may be unchanged).
+export function resetHighlightSync(): void {
+  lastSent = null
+  refreshIn = -1
+  justCleared = false
+}
+
 // Keep the engine's editor-highlight outline in sync with the current selection: whenever the
 // selected set changes, push /highlight with its ids (empty clears it). The engine side is
 // render-only — it never writes to the scene's components, so the highlight never enters the

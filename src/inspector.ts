@@ -19,7 +19,8 @@ import {
   type Snapshot
 } from './state'
 import { buildEditedJson } from './fields'
-import { logicalSnapshot } from './overlays'
+import { logicalSnapshot, resetOverlays } from './overlays'
+import { resetHighlightSync } from './highlight'
 import {
   decodeCustomComponents,
   isCustomComponent,
@@ -35,6 +36,7 @@ import {
   computeSaveDiff,
   buildAuthoredFromSelection,
   defaultSelection,
+  addedAuthoredEntities,
   type DiffRow,
   type DiffSource
 } from './save-diff'
@@ -88,6 +90,148 @@ export async function refresh(): Promise<void> {
 
   await syncFrozenState()
   await reloadSnapshot()
+}
+
+// Open the reload confirm dialog (or, with no local changes, reload straight away). `killed` is the
+// editor-created entities that aren't on disk and so can't survive the reload — surfaced as a
+// warning, computed from the same baseline + editor-touched scope the save diff uses.
+export async function openReloadDialog(): Promise<void> {
+  if (state.scene === undefined) return
+  const hasChanges =
+    state.editedComponents.size > 0 ||
+    state.deletedComponents.size > 0 ||
+    state.deletedEntities.size > 0
+  if (!hasChanges) {
+    // nothing local to keep — reapply vs reset are identical, just reload.
+    await reloadScene(false, [])
+    return
+  }
+  const initial = await saveBaseline()
+  state.reloadConfirm = { killed: addedAuthoredEntities(initial, state.snapshot) }
+}
+
+// Reload the pinned scene from disk (so changed content files — textures, audio, glbs — are picked
+// up without leaving the editor). With `reapply`, replay the editor's unsaved component
+// edits/deletions onto the entities that survive the reload; otherwise discard local changes for a
+// clean reset. The per-frame systems (overlays, pick colliders, highlight) re-apply themselves once
+// the snapshot + selection are restored.
+//
+// Phase 1: only edits to on-disk entities are restored. The editor-created entities in `killed`
+// (never written to disk) can't be reinstantiated at their old ids here, so they're dropped.
+export async function reloadScene(reapply: boolean, killed: string[]): Promise<void> {
+  const scene = state.scene
+  if (scene === undefined) return
+  const wasFrozen = state.frozen
+  const selected = [...state.selected]
+  const active = state.activeEntity
+
+  // The old scene's engine-side overlays/highlight are wiped with it. Forget our bookkeeping so the
+  // first post-reload snapshot isn't reverted against dead overlays and the reconcilers re-apply.
+  resetOverlays()
+  resetHighlightSync()
+
+  state.status = 'loading-snapshot'
+  state.saveStatus = 'reloading…'
+  try {
+    await BevyApi.consoleCommand('reload', [scene.hash])
+  } catch (e) {
+    console.error('reload failed:', e)
+    state.saveStatus = `reload failed: ${String(e)}`
+    return
+  }
+
+  // Wait for the scene to respawn (re-pin and poll until its root entity is back), then take the
+  // fresh on-disk snapshot.
+  await waitForSceneReady(scene.hash)
+  await reloadSnapshot()
+
+  let status: string
+  if (reapply) {
+    // Replay while the fresh scene is playing, so the writes tick in (a frozen scene never processes
+    // inbound CRDT messages); prune the dropped (un-restorable) entities from the changelog.
+    await reapplyChangelog(killed)
+    await sleep(SETTLE_MS)
+    await reloadSnapshot()
+    status =
+      killed.length > 0
+        ? `reloaded — dropped ${killed.length} unsaved new ${killed.length === 1 ? 'entity' : 'entities'} (save first to keep)`
+        : 'reloaded'
+  } else {
+    resetSaveChangelog()
+    status = 'reloaded — local changes discarded'
+  }
+
+  state.selected = new Set(selected.filter((id) => id in state.snapshot))
+  state.activeEntity = active !== null && active in state.snapshot ? active : null
+
+  if (wasFrozen) await pauseScene()
+  state.saveStatus = status
+}
+
+// Poll until the reloaded scene is back: re-pin the hash and check the snapshot has its root entity.
+// Bounded so a failed respawn can't hang the editor.
+async function waitForSceneReady(hash: string): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await sleep(SETTLE_MS)
+    try {
+      await BevyApi.consoleCommand('set_scene', [hash])
+      const reply = await BevyApi.consoleCommand('crdt_snapshot')
+      if ('0' in (JSON.parse(reply) as Snapshot)) return
+    } catch {
+      // scene not respawned yet — keep polling
+    }
+  }
+}
+
+// Re-apply the editor's recorded changes onto the freshly-reloaded scene: edited components on
+// surviving entities are re-written, deleted components/entities re-deleted. `killed` (editor-created
+// entities not on disk) are skipped and pruned from the changelog so a later save stays consistent.
+// Runs against state.snapshot, which reflects the on-disk state at call time.
+async function reapplyChangelog(killed: string[]): Promise<void> {
+  const lost = new Set(killed)
+
+  // Re-delete entities the editor removed (they come back on reload).
+  for (const id of state.deletedEntities) {
+    if (id in state.snapshot) {
+      await BevyApi.consoleCommand('delete_entity', [id, '-r']).catch((e) =>
+        console.error('reapply delete_entity', id, e)
+      )
+    }
+  }
+
+  // Re-write edited components on surviving entities.
+  for (const ckey of state.editedComponents) {
+    const slash = ckey.indexOf('/')
+    const entityId = ckey.slice(0, slash)
+    const name = ckey.slice(slash + 1)
+    if (state.deletedEntities.has(entityId) || lost.has(entityId)) continue
+    if (!(entityId in state.snapshot)) continue
+    const value = state.editorValues.get(ckey)
+    if (value === undefined) continue
+    await writeComponent(entityId, name, JSON.stringify(value)).catch((e) =>
+      console.error('reapply', ckey, e)
+    )
+  }
+
+  // Re-delete components the editor removed (back on disk after reload).
+  for (const ckey of state.deletedComponents) {
+    const slash = ckey.indexOf('/')
+    const entityId = ckey.slice(0, slash)
+    const name = ckey.slice(slash + 1)
+    if (state.snapshot[entityId]?.[name] !== undefined) {
+      await BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) =>
+        console.error('reapply delete_component', ckey, e)
+      )
+    }
+  }
+
+  // Prune changelog entries for the dropped entities, so a later save stays consistent.
+  for (const ckey of [...state.editedComponents]) {
+    if (lost.has(ckey.slice(0, ckey.indexOf('/')))) {
+      state.editedComponents.delete(ckey)
+      state.editorValues.delete(ckey)
+    }
+  }
 }
 
 // Sync the local frozen flag from the pinned scene's actual status (it may
@@ -495,6 +639,16 @@ export function isLocalScene(): boolean {
   return state.scene?.hash?.startsWith('b64-') ?? false
 }
 
+// The on-disk authored baseline to diff against: the last-saved set if we have one (so prior saves
+// stick), else the engine's original /crdt_initial. Shared by save and the reload warning.
+export async function saveBaseline(): Promise<Snapshot> {
+  if (state.savedBaseline !== null) return state.savedBaseline
+  const reply = await BevyApi.consoleCommand('crdt_initial')
+  const initial = JSON.parse(reply) as Snapshot
+  decodeCustomComponents(initial)
+  return initial
+}
+
 export async function saveComposite(): Promise<void> {
   if (!isLocalScene()) {
     state.saveStatus = 'save needs a local scene (served by `dcl start`) — clone it locally to edit'
@@ -504,16 +658,7 @@ export async function saveComposite(): Promise<void> {
   try {
     // isSavableComponent gates protocol components on the writable set; make sure it's loaded.
     if (state.componentNames.length === 0) await loadComponentNames()
-    // Diff against the last-saved authored set if we have one (so prior saves stick); otherwise the
-    // engine's original /crdt_initial baseline. See state.savedBaseline.
-    let initial: Snapshot
-    if (state.savedBaseline !== null) {
-      initial = state.savedBaseline
-    } else {
-      const initialReply = await BevyApi.consoleCommand('crdt_initial')
-      initial = JSON.parse(initialReply) as Snapshot
-      decodeCustomComponents(initial)
-    }
+    const initial = await saveBaseline()
     const rows = computeSaveDiff(initial, state.snapshot)
     if (rows.length === 0) {
       await writeComposite(initial, [], new Map())

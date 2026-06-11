@@ -128,6 +128,19 @@ export function computeSaveDiff(initial: Snapshot, live: Snapshot): DiffRow[] {
   return rows
 }
 
+// Authored entities the editor created this session that aren't on disk: present in `live` and
+// editor-touched, but absent from the baseline `initial` (= savedBaseline ?? /crdt_initial). These
+// can't survive a scene reload (they'd need reinstantiation at their original ids), so the reload
+// warns about them. Same baseline + editor-touched notion the save diff scopes by.
+export function addedAuthoredEntities(initial: Snapshot, live: Snapshot): string[] {
+  const ids = new Set<string>()
+  for (const key of state.editedComponents) {
+    const id = splitKey(key)[0]
+    if (id in live && !(id in initial) && isAuthoredEntity(Number(id))) ids.add(id)
+  }
+  return [...ids]
+}
+
 type AuthoredData = Record<string, Record<string, unknown>>
 
 // Apply the dialog's selections onto the baseline → the authored data to write. Starts from the

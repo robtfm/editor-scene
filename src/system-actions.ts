@@ -18,6 +18,8 @@ function closeTopModal(): boolean {
     state.newEntityName = ''
   } else if (state.parentConfirm) {
     state.parentConfirm = false
+  } else if (state.reloadConfirm !== null) {
+    state.reloadConfirm = null
   } else if (state.deleteConfirm !== null) {
     state.deleteConfirm = null
   } else if (state.saveDialog !== null) {

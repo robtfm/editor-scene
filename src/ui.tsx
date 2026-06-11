@@ -34,6 +34,8 @@ import { cycleCamMode, orientToAxis } from './free-cam'
 import { gizmoCameraEntity, gizmoActive, startGizmoDrag, endGizmoDrag } from './gizmo'
 import {
   refresh,
+  reloadScene,
+  openReloadDialog,
   setComponentValue,
   applyStructuredEdits,
   pauseScene,
@@ -1958,6 +1960,93 @@ function parentDialog(): ReactEcs.JSX.Element | null {
   )
 }
 
+// Reload confirm dialog: reload the scene from disk, choosing whether to reapply the editor's local
+// changes or reset to the on-disk state. Warns when unsaved new entities can't be restored.
+function reloadDialog(): ReactEcs.JSX.Element | null {
+  const confirm = state.reloadConfirm
+  if (confirm === null) return null
+  const killed = confirm.killed.length
+  const close = (): void => {
+    state.reloadConfirm = null
+  }
+  return (
+    <UiEntity
+      uiTransform={{
+        width: '100%',
+        height: '100%',
+        positionType: 'absolute',
+        position: { top: 0, left: 0 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+    >
+      <UiEntity
+        uiTransform={{
+          width: '100%',
+          height: '100%',
+          positionType: 'absolute',
+          position: { top: 0, left: 0 }
+        }}
+        uiBackground={{ color: Color4.create(0, 0, 0, 0.5) }}
+        onMouseDown={() => {}}
+      />
+      <UiEntity
+        uiTransform={{ width: 460, flexDirection: 'column', padding: 16 }}
+        uiBackground={{ color: HEADER_BG }}
+      >
+        <UiEntity
+          uiTransform={{ width: '100%', height: 26, alignItems: 'center' }}
+          uiText={{
+            value: 'Reload scene from disk',
+            fontSize: FS + 2,
+            color: TEXT,
+            textAlign: 'middle-left'
+          }}
+        />
+        <UiEntity
+          uiTransform={{ width: '100%', height: 40, margin: { top: 4, bottom: 4 } }}
+          uiText={{
+            value:
+              'Reload picks up changed content files. Reapply your local edits, or reset to the ' +
+              'on-disk state and discard them?',
+            fontSize: FS - 2,
+            color: MUTED,
+            textAlign: 'top-left'
+          }}
+        />
+        {killed > 0 ? (
+          <UiEntity
+            uiTransform={{ width: '100%', height: 34, margin: { bottom: 6 } }}
+            uiText={{
+              value:
+                `⚠ ${killed} unsaved new ${killed === 1 ? 'entity' : 'entities'} can't be restored on ` +
+                'reload and will be lost. Cancel and save first to keep them.',
+              fontSize: FS - 2,
+              color: WARN,
+              textAlign: 'top-left'
+            }}
+          />
+        ) : (
+          []
+        )}
+        <UiEntity
+          uiTransform={{ width: '100%', height: 30, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {dialogButton('Reapply changes', 150, BUTTON_BG, () => {
+            close()
+            reloadScene(true, confirm.killed).catch(console.error)
+          })}
+          {dialogButton('Reset (discard)', 140, REVERT_BG, () => {
+            close()
+            reloadScene(false, confirm.killed).catch(console.error)
+          })}
+          {dialogButton('Cancel', 80, HEADER_BG, close)}
+        </UiEntity>
+      </UiEntity>
+    </UiEntity>
+  )
+}
+
 function actionButton(action: {
   id: string
   label: string
@@ -3156,6 +3245,22 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               width: 80,
               height: 22,
               alignItems: 'center',
+              justifyContent: 'center',
+              margin: { right: 4 }
+            }}
+            uiBackground={{ color: BUTTON_BG }}
+            uiText={{ value: 'Reload', fontSize: FS - 1, color: TEXT }}
+            onMouseDown={() => {
+              // Reload the scene from disk (picks up changed content files). Confirms first when
+              // there are local changes — reapply them or reset.
+              openReloadDialog().catch(console.error)
+            }}
+          />
+          <UiEntity
+            uiTransform={{
+              width: 80,
+              height: 22,
+              alignItems: 'center',
               justifyContent: 'center'
             }}
             uiBackground={{ color: BUTTON_BG }}
@@ -3284,6 +3389,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       {componentWindowPanel() ?? []}
       {deleteDialog() ?? []}
       {parentDialog() ?? []}
+      {reloadDialog() ?? []}
       {newEntityDialog() ?? []}
       {assetPickerDialog() ?? []}
       {contentViewerDialog() ?? []}

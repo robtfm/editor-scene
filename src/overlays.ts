@@ -83,6 +83,12 @@ export function applyOriginals(originals: Originals, snapshot: Snapshot): Snapsh
 // never leak into display or the save.
 export const originals: Originals = new Map()
 
+// Forget all recorded overlays — used on scene reload, when the engine-side overlays are wiped with
+// the old scene. The per-frame reconcilers then see "nothing overlaid" and re-apply from scratch.
+export function resetOverlays(): void {
+  originals.clear()
+}
+
 // The current scene state with all overlays reverted — what every snapshot consumer (tree, editor,
 // diff, save) should read instead of the raw live snapshot.
 export function logicalSnapshot(snapshot: Snapshot): Snapshot {
