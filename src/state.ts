@@ -26,6 +26,11 @@ export const state = {
   snapshot: {} as Snapshot,
   expandedEntities: new Set<string>(),
   expandedComponents: new Set<ComponentKey>(),
+  // Explicit open/closed overrides for nested subsections in a component editor, keyed
+  // `${componentKey}|${fieldPath}`. Absent => use the computed default (a subsection starts closed
+  // when it has siblings, open when it's the sole child). Cleared when a component is (re)expanded or
+  // the component window opens, so reopening an editor starts from the defaults (no persistence).
+  subsectionOverrides: new Map<string, boolean>(),
   // raw-JSON edit text per component, used only in raw mode (absent => verbatim)
   drafts: new Map<ComponentKey, string>(),
   // structured edits keyed by `${componentKey}::${path}` (see fields.ts). Numbers
@@ -361,6 +366,26 @@ export function toggleEntity(id: string): void {
 export function toggleComponent(key: string): void {
   if (state.expandedComponents.has(key)) state.expandedComponents.delete(key)
   else state.expandedComponents.add(key)
+  // Reset this component's subsection state, so reopening its editor starts from the defaults.
+  clearSubsectionOverrides(key)
+}
+
+// Toggle a nested subsection within a component editor, overriding its computed default. `open` is
+// its current resolved state, so the override is set to the opposite.
+export function toggleSubsection(id: string, open: boolean): void {
+  state.subsectionOverrides.set(id, !open)
+}
+
+// Drop subsection overrides for one component (prefix `${key}|`) or, with no key, all of them.
+export function clearSubsectionOverrides(key?: string): void {
+  if (key === undefined) {
+    state.subsectionOverrides.clear()
+    return
+  }
+  const prefix = `${key}|`
+  for (const id of state.subsectionOverrides.keys()) {
+    if (id.startsWith(prefix)) state.subsectionOverrides.delete(id)
+  }
 }
 
 export type Forest = {

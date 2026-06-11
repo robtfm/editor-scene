@@ -5,6 +5,8 @@ import {
   state,
   toggleEntity,
   toggleComponent,
+  toggleSubsection,
+  clearSubsectionOverrides,
   toggleRawMode,
   clearComponentEdits,
   setActiveAction,
@@ -608,12 +610,19 @@ function readonlyField(
   )
 }
 
-// A labelled, indented group for nested objects/arrays.
+// A labelled, indented group for nested objects/arrays. Labelled groups are collapsible; the label
+// row toggles, and a faint left rule marks the nesting depth. Default: closed when it has siblings
+// (`hasSiblings`), open when it's the sole child (no point hiding the only thing at its level). A
+// user toggle overrides the default until the editor is reopened.
 function group(
+  key: ComponentKey,
   path: string,
   label: string,
-  children: ReactEcs.JSX.Element[]
+  children: ReactEcs.JSX.Element[],
+  hasSiblings: boolean
 ): ReactEcs.JSX.Element {
+  const collapseId = `${key}|${path}`
+  const open = state.subsectionOverrides.get(collapseId) ?? !hasSiblings
   return (
     <UiEntity
       key={path === '' ? 'root' : path}
@@ -623,16 +632,21 @@ function group(
         <UiEntity
           uiTransform={{ width: '100%', height: 22, alignItems: 'center' }}
           uiText={{
-            value: label,
+            value: `${chevron(open)} ${label}`,
             fontSize: FS - 1,
             color: ACCENT,
             textAlign: 'middle-left'
+          }}
+          onMouseDown={() => {
+            toggleSubsection(collapseId, open)
           }}
         />
       ) : (
         []
       )}
-      {label !== '' ? (
+      {!open ? (
+        []
+      ) : label !== '' ? (
         <UiEntity uiTransform={{ width: '100%', flexDirection: 'row' }}>
           <UiEntity
             uiTransform={{ width: 1, height: '100%', margin: { left: 1, right: 8 } }}
@@ -657,7 +671,8 @@ function renderField(
   key: ComponentKey,
   path: string,
   label: string,
-  value: unknown
+  value: unknown,
+  hasSiblings = false
 ): ReactEcs.JSX.Element {
   if (isColor(value)) return colorField(key, path, label, value)
   if (isVector(value)) {
@@ -665,18 +680,21 @@ function renderField(
   }
   if (Array.isArray(value)) {
     return group(
+      key,
       path,
       `${label} [${value.length}]`,
-      value.map((v, i) => renderField(key, joinPath(path, i), String(i), v))
+      value.map((v, i) => renderField(key, joinPath(path, i), String(i), v, value.length > 1)),
+      hasSiblings
     )
   }
   if (isRecord(value)) {
+    const ks = Object.keys(value)
     return group(
+      key,
       path,
       label,
-      Object.keys(value).map((k) =>
-        renderField(key, joinPath(path, k), k, value[k])
-      )
+      ks.map((k) => renderField(key, joinPath(path, k), k, value[k], ks.length > 1)),
+      hasSiblings
     )
   }
   if (typeof value === 'number') return numberField(key, path, label, value)
@@ -986,14 +1004,15 @@ function renderSchemaNode(
   key: ComponentKey,
   node: SchemaNode,
   path: string,
-  value: unknown
+  value: unknown,
+  hasSiblings = false
 ): ReactEcs.JSX.Element {
   switch (node.kind) {
     case 'message': {
       const children = node.fields.map((f) =>
-        renderSchemaNode(schema, key, f, joinPath(path, f.name ?? ''), value)
+        renderSchemaNode(schema, key, f, joinPath(path, f.name ?? ''), value, node.fields.length > 1)
       )
-      return group(path === '' ? '' : path, path === '' ? '' : (node.name ?? ''), children)
+      return group(key, path === '' ? '' : path, path === '' ? '' : (node.name ?? ''), children, hasSiblings)
     }
     case 'oneof': {
       const active = activeCase(key, path, node, value)
@@ -1023,7 +1042,7 @@ function renderSchemaNode(
       const activeCaseNode = node.cases.find((c) => c.name === active)
       const body =
         activeCaseNode !== undefined
-          ? renderSchemaNode(schema, key, activeCaseNode.field, joinPath(path, active as string), value)
+          ? renderSchemaNode(schema, key, activeCaseNode.field, joinPath(path, active as string), value, false)
           : []
       return (
         <UiEntity key={path} uiTransform={{ width: '100%', flexDirection: 'column' }}>
@@ -1038,7 +1057,7 @@ function renderSchemaNode(
       const arr = valueAt(value, path)
       const items = Array.isArray(arr) ? arr : []
       const children = items.map((_, i) =>
-        renderSchemaNode(schema, key, node.element, joinPath(path, String(i)), value)
+        renderSchemaNode(schema, key, node.element, joinPath(path, String(i)), value, items.length > 1)
       )
       const body =
         children.length > 0
@@ -1050,7 +1069,7 @@ function renderSchemaNode(
                 uiText={{ value: '(empty — add/remove via Raw for now)', fontSize: FS - 3, color: MUTED, textAlign: 'middle-left' }}
               />
             ]
-      return group(path, `${node.name ?? ''} [${items.length}]`, body)
+      return group(key, path, `${node.name ?? ''} [${items.length}]`, body, hasSiblings)
     }
     case 'leaf':
       return schemaLeaf(schema, key, node, path, value)
@@ -1437,6 +1456,8 @@ function openComponentWindow(entityId: string): void {
   state.componentWindow = entityId
   state.addComponentOpen = false
   state.addComponentFilter = ''
+  // Start the editor from default subsection state (overrides aren't persisted across reopens).
+  clearSubsectionOverrides()
 }
 
 // Reachable-from-roots set, computed independently of expansion so that the
