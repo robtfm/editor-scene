@@ -3442,7 +3442,11 @@ function componentWindowPanel(): ReactEcs.JSX.Element | null {
         <UiEntity
           uiTransform={{ flexGrow: 1, height: 22, alignItems: 'center' }}
           uiText={{
-            value: `Components · ${entityLabel(id)}`,
+            value: `Components · ${
+              entityName(state.snapshot, id) !== undefined
+                ? entityDisplay(state.snapshot, id)
+                : entityLabel(id)
+            }`,
             fontSize: FS + 1,
             color: TEXT,
             textAlign: 'middle-left'

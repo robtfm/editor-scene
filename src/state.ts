@@ -25,7 +25,8 @@ export const state = {
   error: '',
   scene: undefined as LiveSceneInfo | undefined,
   snapshot: {} as Snapshot,
-  expandedEntities: new Set<string>(),
+  // root (entity 0) expanded by default so the scene's content shows on load.
+  expandedEntities: new Set<string>(['0']),
   expandedComponents: new Set<ComponentKey>(),
   // Explicit open/closed overrides for nested subsections in a component editor, keyed
   // `${componentKey}|${fieldPath}`. Absent => use the computed default (a subsection starts closed
@@ -534,8 +535,12 @@ export function parentOf(snapshot: Snapshot, id: string): string | null {
 // a forest root when its parent is absent from the snapshot (e.g. the parent has
 // no components of its own, or is the scene root). Cycles/orphans are surfaced as
 // extra roots by the renderer so nothing is silently dropped.
+// Reserved engine entity 5 (WORLD_ORIGIN) — kept in the snapshot for world-position math, but it's
+// engine plumbing, not scene content, so hide it from the tree.
+const HIDDEN_TREE_ENTITY = '5'
+
 export function buildForest(snapshot: Snapshot): Forest {
-  const ids = Object.keys(snapshot)
+  const ids = Object.keys(snapshot).filter((id) => id !== HIDDEN_TREE_ENTITY)
   const present = new Set(ids)
   const children = new Map<string, string[]>()
   const roots: string[] = []
