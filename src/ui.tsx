@@ -3264,8 +3264,9 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               justifyContent: 'center'
             }}
             uiBackground={{ color: BUTTON_BG }}
-            uiText={{ value: 'Refresh', fontSize: FS - 1, color: TEXT }}
+            uiText={{ value: 'Resync', fontSize: FS - 1, color: TEXT }}
             onMouseDown={() => {
+              // Re-pull the live scene's current state into the editor (no scene respawn).
               refresh().catch(console.error)
             }}
           />
