@@ -1,6 +1,6 @@
 import { BevyApi } from './bevy-api'
 import { state } from './state'
-import { originals, recordOriginal, forgetOriginal } from './overlays'
+import { originals, recordOriginal, forgetOriginal, isOverlaid, setOriginalAbsent } from './overlays'
 import { childIdsOf } from './inspector'
 
 // Impure overlay actions. An overlay sets an engine-facing value on a real scene component (so the
@@ -47,6 +47,17 @@ export function clearOverlay(entity: string, component: string): void {
     )
   }
   forgetOriginal(originals, entity, component)
+}
+
+// The user deleted (entity, component). If it's overlaid, the overlay stays applied (the engine keeps
+// showing the overlaid value, the button still reads +/-) but its recovery target is retargeted to
+// "deleted" — so removing the overlay then drops the component, and logicalSnapshot reverts to absent.
+// Returns true when the overlay is now keeping the engine value, so the caller should NOT also
+// /delete_component (that would tear out the overlay).
+export function onComponentDeleted(entity: string, component: string): boolean {
+  if (!isOverlaid(originals, entity, component)) return false
+  setOriginalAbsent(originals, entity, component)
+  return true
 }
 
 // --- visibility overlay (applied to an entity + its whole subtree) ---

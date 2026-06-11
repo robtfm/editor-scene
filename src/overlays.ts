@@ -39,6 +39,15 @@ export function recordOriginal(
   )
 }
 
+// Retarget a recorded original to `absent` — used when the user deletes an overlaid component: the
+// overlay stays applied, but its recovery target becomes "deleted", so clearing the overlay (and the
+// logical revert) drops the component instead of restoring the pre-delete value. No-op if not
+// overlaid (the caller deletes outright in that case).
+export function setOriginalAbsent(originals: Originals, entity: string, component: string): void {
+  const perEntity = originals.get(entity)
+  if (perEntity?.has(component)) perEntity.set(component, { present: false })
+}
+
 // Forget a recorded original — call after restoring it (clearing the overlay).
 export function forgetOriginal(originals: Originals, entity: string, component: string): void {
   const perEntity = originals.get(entity)

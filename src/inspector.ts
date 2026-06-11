@@ -29,6 +29,7 @@ import {
 import { cell, ABSENT, type Cell } from './diff-util'
 import { buildEditedJson } from './fields'
 import { logicalSnapshot, resetOverlays } from './overlays'
+import { onComponentDeleted } from './overlay-actions'
 import { resetHighlightSync } from './highlight'
 import {
   decodeCustomComponents,
@@ -819,11 +820,17 @@ export function deleteComponent(entityId: string, name: string): void {
   state.expandedComponents.delete(key)
   clearComponentEdits(key)
   markComponentDeleted(entityId, name)
+  // If the component is overlaid, the overlay stays applied and absorbs the deletion (its recovery
+  // becomes "delete"); the engine keeps the overlay value until the overlay is removed, so we must
+  // not /delete_component here (that would tear out the overlay). Otherwise delete it outright.
+  const keptByOverlay = onComponentDeleted(entityId, name)
   recordOp(entityId, name, before, ABSENT)
   commitTxn()
-  BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) => {
-    console.error('delete_component failed:', name, e)
-  })
+  if (!keptByOverlay) {
+    BevyApi.consoleCommand('delete_component', [entityId, name]).catch((e) => {
+      console.error('delete_component failed:', name, e)
+    })
+  }
 }
 
 // Write a component value via /set_component, then refresh so the tree reflects
