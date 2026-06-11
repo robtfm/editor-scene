@@ -87,18 +87,31 @@ export function computeWorldPositions(
   return out
 }
 
-// The parent-0 (scene-root-local) Transform.position that places a new root entity at world
-// position `world` — the inverse of computeWorldPositions for a root entity (scene-local = world +
-// the world origin's scene-local position). Matches worldToLocalPosition for a parent-0 entity.
-// Null when entity 5 (the world origin) is absent.
-export function worldToRootLocal(
+// The local Transform.position (relative to `parentId`, '0' = scene root) that places a new entity
+// at world position `world`. Like worldToLocalPosition but for an explicit parent — used to spawn a
+// new entity at a world point before it exists. For '0' this reduces to scene-local = world + the
+// world origin's scene-local position. Null when entity 5 (the world origin) is absent.
+export function worldToParentLocal(
   snapshot: Snapshot,
+  parentId: string,
   world: Vector3
 ): { x: number; y: number; z: number } | null {
   if (!('5' in snapshot)) return null
-  const origin = composed(snapshot, '5', new Map(), new Set()).pos
-  const p = Vector3.add(world, origin)
-  return { x: p.x, y: p.y, z: p.z }
+  const cache = new Map<string, Trs>()
+  const t5 = composed(snapshot, '5', cache, new Set()).pos
+  const parent: Trs =
+    parentId === '0' || !(parentId in snapshot)
+      ? { pos: Vector3.Zero(), rot: Quaternion.Identity(), scale: Vector3.One() }
+      : composed(snapshot, parentId, cache, new Set())
+  const parentWorldPos = Vector3.subtract(parent.pos, t5)
+  const rel = Vector3.subtract(world, parentWorldPos)
+  const inv = Quaternion.create(-parent.rot.x, -parent.rot.y, -parent.rot.z, parent.rot.w)
+  const unrot = rotateVec3ByQuat(rel, inv)
+  return {
+    x: unrot.x / (parent.scale.x || 1),
+    y: unrot.y / (parent.scale.y || 1),
+    z: unrot.z / (parent.scale.z || 1)
+  }
 }
 
 // World position + rotation of a single entity (for orienting a local-axis
