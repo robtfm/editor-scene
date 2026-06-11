@@ -11,6 +11,8 @@ import {
   effectiveMode,
   canTransform,
   TRANSFORM_TOOLS,
+  toggleBehavior,
+  type BehaviorKey,
   cycleNodeDisplay,
   selectionClick,
   rowElementId,
@@ -90,6 +92,9 @@ const VALUE_BG = Color4.create(0, 0, 0, 0.35)
 const TEXT = Color4.create(0.9, 0.9, 0.95, 1)
 const MUTED = Color4.create(0.6, 0.6, 0.68, 1)
 const ACCENT = Color4.create(0.55, 0.78, 1, 1)
+// on/off state for the interact-context toggles (code + behaviors)
+const ON_BG = Color4.create(0.2, 0.45, 0.26, 1)
+const OFF_BG = Color4.create(0.5, 0.26, 0.26, 1)
 const BUTTON_BG = Color4.create(0.25, 0.4, 0.6, 1)
 const WARN = Color4.create(1, 0.7, 0.2, 1)
 
@@ -1698,13 +1703,74 @@ function axisButtons(): ReactEcs.JSX.Element[] {
   )
 }
 
-// Tool section context: the orient/pivot toggle when it applies, else an empty
-// placeholder of the same width so the section keeps a constant size.
-function toolContext(): ReactEcs.JSX.Element {
+// Tool section context (row 2): in interact mode, the scene-runtime controls (Code play/pause, Step,
+// behavior toggles); for a transform tool, the orient/pivot toggle; else an empty placeholder of the
+// same width so the section — and the panel height — stay constant.
+function toolContext(): ReactEcs.JSX.Element | ReactEcs.JSX.Element[] {
+  if (effectiveMode() === 'interact') return interactControls()
   const toggle = modeToggle()
   if (!Array.isArray(toggle)) return toggle
   return (
     <UiEntity key="tool-ctx-ghost" uiTransform={{ width: 110, height: 22, margin: { left: 6 } }} />
+  )
+}
+
+// Interact controls: the scene's code on/off (entering interact plays, leaving pauses — this just
+// overrides within interact), a Step button live only while paused, and the per-behavior toggles.
+function interactControls(): ReactEcs.JSX.Element[] {
+  return [
+    codeButton(),
+    pbButton('Step', state.status === 'ready' && state.frozen, () => {
+      stepScene().catch(console.error)
+    }),
+    behaviorChip('tween', 'Tween'),
+    behaviorChip('animation', 'Anim'),
+    behaviorChip('billboard', 'Billbd'),
+    behaviorChip('media', 'Media')
+  ]
+}
+
+// Toggle the scene's code execution (pause/play). Lit while running.
+function codeButton(): ReactEcs.JSX.Element {
+  const running = !state.frozen
+  return (
+    <UiEntity
+      key="code-toggle"
+      uiTransform={{
+        width: 70,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: running ? ON_BG : OFF_BG }}
+      uiText={{ value: 'Code', fontSize: FS - 2, color: TEXT }}
+      onMouseDown={() => {
+        ;(running ? pauseScene() : playScene()).catch(console.error)
+      }}
+    />
+  )
+}
+
+// A behavior on/off toggle (tween/animation/billboard/media). Lit while the behavior runs in interact.
+function behaviorChip(key: BehaviorKey, label: string): ReactEcs.JSX.Element {
+  const on = state.behaviors[key]
+  return (
+    <UiEntity
+      key={`bhv-${key}`}
+      uiTransform={{
+        width: 58,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: on ? ON_BG : OFF_BG }}
+      uiText={{ value: label, fontSize: FS - 2, color: TEXT }}
+      onMouseDown={() => {
+        toggleBehavior(key)
+      }}
+    />
   )
 }
 
@@ -1847,12 +1913,10 @@ function actionButton(action: {
   label: string
 }): ReactEcs.JSX.Element {
   // highlight the *effective* mode (so Interact lights up when it's the empty-selection fallback);
-  // Interact is disabled while the scene is paused, and the transform tools while there's no
-  // transformable (non-reserved) active entity to act on.
+  // the transform tools are disabled while there's no transformable (non-reserved) active entity to
+  // act on. Interact is always reachable (it owns play/pause now — see its context row).
   const active = effectiveMode() === action.id
-  const disabled =
-    (action.id === 'interact' && state.frozen) ||
-    (TRANSFORM_TOOLS.includes(action.id) && !canTransform())
+  const disabled = TRANSFORM_TOOLS.includes(action.id) && !canTransform()
   return (
     <UiEntity
       key={`action-${action.id}`}
@@ -3046,27 +3110,6 @@ export function inspectorUi(): ReactEcs.JSX.Element {
               refresh().catch(console.error)
             }}
           />
-        </UiEntity>
-        {/* Transport controls (mode/parenting/display live in the top toolbar) */}
-        <UiEntity
-          uiTransform={{
-            width: '100%',
-            height: 24,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            margin: { top: 4 }
-          }}
-        >
-          {pbButton('Pause', state.status === 'ready' && !state.frozen, () => {
-            pauseScene().catch(console.error)
-          })}
-          {pbButton('Step', state.status === 'ready' && state.frozen, () => {
-            stepScene().catch(console.error)
-          })}
-          {pbButton('Play', state.status === 'ready' && state.frozen, () => {
-            playScene().catch(console.error)
-          })}
         </UiEntity>
       </UiEntity>
 

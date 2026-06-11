@@ -61,6 +61,9 @@ export const state = {
   jumpTarget: null as string | { x: number; y: number } | null,
   // whether the pinned scene is currently frozen (paused)
   frozen: false,
+  // per-category "let this run while interacting" toggles (interact tool context). Outside interact
+  // every category is forced off; inside, each follows its flag here. Default all on (full play).
+  behaviors: { tween: true, animation: true, billboard: true, media: true },
   // entity id whose delete-confirm dialog is open, or null
   deleteConfirm: null as string | null,
   // entity id whose component window (popup editor) is open, or null. Components
@@ -217,28 +220,31 @@ export function canTransform(): boolean {
 }
 
 // Switch mode. Selecting a tool makes it current (and remembered as the last non-select tool); the
-// Select button toggles select on/off, returning to the last tool. Interact can't be entered while
-// the scene is paused.
+// Select button toggles select on/off, returning to the last tool.
 export function setActiveAction(action: string): void {
   if (action === 'select') {
     state.activeAction = state.activeAction === 'select' ? state.lastTool : 'select'
     return
   }
-  if (action === 'interact' && state.frozen) return
   if (NON_SELECT_TOOLS.includes(action)) state.lastTool = action as typeof state.lastTool
   state.activeAction = action
 }
 
-// The real mode right now, derived from the chosen tool + selection + pause:
+// The real mode right now, derived from the chosen tool + selection:
 //  - a transform tool falls back to 'interact' when there's nothing it can act on — no selection, or
 //    a reserved (<512, non-transformable) active entity — WITHOUT changing the stored choice;
 //    'select' never falls back (you need it to build a selection).
-//  - 'interact' (explicit or fallback) needs a running scene — paused returns null (no mode).
-export function effectiveMode(): string | null {
+// Decoupled from pause: entering/leaving interact drives the pause (see the interact lifecycle), so
+// interact must stay reachable while paused — the play/pause controls live in its context row.
+export function effectiveMode(): string {
   const a = state.activeAction
-  const wantsInteract = a === 'interact' || (!canTransform() && TRANSFORM_TOOLS.includes(a))
-  if (wantsInteract) return state.frozen ? null : 'interact'
+  if (a === 'interact' || (!canTransform() && TRANSFORM_TOOLS.includes(a))) return 'interact'
   return a
+}
+
+export type BehaviorKey = keyof typeof state.behaviors
+export function toggleBehavior(key: BehaviorKey): void {
+  state.behaviors[key] = !state.behaviors[key]
 }
 
 const NODE_DISPLAY_ORDER = ['always', 'selected', 'selecting'] as const

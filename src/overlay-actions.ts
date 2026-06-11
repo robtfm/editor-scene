@@ -20,6 +20,16 @@ export function applyOverlay(entity: string, component: string, value: unknown):
   )
 }
 
+// Like applyOverlay but removes the component entirely (engine /delete_component) rather than setting
+// a neutered value — for behaviors where a stopped-but-present component still drives the engine (a
+// paused Tween holds its pose). clearOverlay restores the recorded original.
+export function applyDeleteOverlay(entity: string, component: string): void {
+  recordOriginal(originals, entity, component, state.snapshot)
+  BevyApi.consoleCommand('delete_component', [entity, component]).catch((e) =>
+    console.error('overlay delete_component failed:', entity, component, e)
+  )
+}
+
 // Clear an overlay: restore the recorded original (or delete the component if it was absent), then
 // forget it.
 export function clearOverlay(entity: string, component: string): void {

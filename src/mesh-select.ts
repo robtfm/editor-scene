@@ -7,14 +7,28 @@ import {
   PrimaryPointerInfo,
   type Entity
 } from '@dcl/sdk/ecs'
-import { state, selectionClick, selectEntityInTree, clearSelection, parentOf } from './state'
-import { applyOverlay, visibilityMode } from './overlay-actions'
+import {
+  state,
+  effectiveMode,
+  selectionClick,
+  selectEntityInTree,
+  clearSelection,
+  parentOf
+} from './state'
+import { gizmoActive } from './gizmo'
+import { applyOverlay, clearOverlay, visibilityMode } from './overlay-actions'
 import { originals, isOverlaid } from './overlays'
+import { refreshHighlight } from './highlight'
 
 // CL_RESERVED6 — an editor-only collider layer (scene authors use CL_CUSTOM1..8). We overlay it onto
 // every gltf's visible meshes so they're raycast-pickable, and cast the pick ray on the same layer.
 // Inert otherwise: a 128 collider only answers a 128-mask query (physics/pointer/scene casts ignore it).
 const PICK_LAYER = 128
+const CL_PHYSICS = 2 // ColliderLayer.CL_PHYSICS — stripped while editing so colliders can't shove the
+// frozen player. The defaults below are the engine's when the mask is unset (so stripping is correct
+// even for authors who never set a mask): visible meshes 0, invisible meshes + MeshCollider 1|2.
+const DEFAULT_INVIS_MASK = 3 // CL_POINTER | CL_PHYSICS
+const DEFAULT_COLLIDER_MASK = 3 // CL_POINTER | CL_PHYSICS
 const GLTF = 'GltfContainer'
 const MESH_RENDERER = 'MeshRenderer'
 const MESH_COLLIDER = 'MeshCollider'
@@ -45,34 +59,81 @@ export function setupMeshSelect(): void {
   })
 }
 
-// Make every renderable entity pickable on the editor layer (128), idempotently. The overlay core
-// reverts these for display and save.
-//  - GltfContainer: overlay visibleMeshesCollisionMask |= 128 (one-time gltf reload per entity).
-//  - MeshRenderer (primitives): overlay a MeshCollider of the same shape with the 128 bit. NB this
-//    replaces any scene-authored MeshCollider while editing, so a scene that uses a *different*
-//    MeshCollider shape than its MeshRenderer loses that distinction in the editor (accepted).
+// While editing (not interacting), overlay every renderable entity's collider to add the editor pick
+// layer 128 so it's raycast-pickable. Physics is left intact (you walk around to inspect) EXCEPT on
+// the selected entities while a gizmo is active — those get CL_PHYSICS stripped so dragging them
+// can't shove the held player. Restored to the real collider in interact mode; reverted for save.
+//  - GltfContainer: visible meshes |= 128; physics stripped from both masks when `strip`.
+//  - MeshRenderer (primitives): overlay a MeshCollider of the same shape; pick-only when the entity
+//    had no collider, otherwise the real mask (physics stripped when `strip`). NB this replaces a
+//    scene-authored MeshCollider of a *different* shape than its MeshRenderer in the editor (accepted).
 function syncPickColliders(): void {
+  const live = effectiveMode() === 'interact'
+  const gizmo = gizmoActive()
   for (const [id, comps] of Object.entries(state.snapshot)) {
-    const gltf = comps[GLTF] as { visibleMeshesCollisionMask?: number } | undefined
+    const strip = gizmo && state.selected.has(id)
+    const gltf = comps[GLTF] as
+      | { visibleMeshesCollisionMask?: number; invisibleMeshesCollisionMask?: number }
+      | undefined
     if (gltf !== undefined) {
-      if (isOverlaid(originals, id, GLTF)) continue
-      applyOverlay(id, GLTF, {
-        ...gltf,
-        visibleMeshesCollisionMask: (gltf.visibleMeshesCollisionMask ?? 0) | PICK_LAYER
+      reconcileCollider(id, GLTF, live, strip, () => {
+        const vis = gltf.visibleMeshesCollisionMask ?? 0
+        const value: Record<string, unknown> = {
+          ...gltf,
+          visibleMeshesCollisionMask: (strip ? vis & ~CL_PHYSICS : vis) | PICK_LAYER
+        }
+        if (strip) {
+          value.invisibleMeshesCollisionMask =
+            (gltf.invisibleMeshesCollisionMask ?? DEFAULT_INVIS_MASK) & ~CL_PHYSICS
+        }
+        applyOverlay(id, GLTF, value)
+        // The mask change reloads the gltf, dropping the outline off the new meshes — re-tag it.
+        refreshHighlight()
       })
       continue
     }
     const renderer = comps[MESH_RENDERER] as { mesh?: unknown } | undefined
-    if (renderer === undefined || isOverlaid(originals, id, MESH_COLLIDER)) continue
-    const existing = comps[MESH_COLLIDER] as { collisionMask?: number } | undefined
-    const value: Record<string, unknown> = {
-      collisionMask: (existing?.collisionMask ?? 0) | PICK_LAYER
-    }
-    // Map the renderer's shape when set; when it's unset/unmappable, omit mesh — the engine defaults
-    // both a meshless MeshRenderer and a meshless MeshCollider to a box, so they still match.
-    const mesh = colliderMeshFromRenderer(renderer.mesh)
-    if (mesh !== undefined) value.mesh = mesh
-    applyOverlay(id, MESH_COLLIDER, value)
+    if (renderer === undefined) continue
+    reconcileCollider(id, MESH_COLLIDER, live, strip, () => {
+      const existing = comps[MESH_COLLIDER] as { collisionMask?: number } | undefined
+      // A synthesised collider (no real one) is pick-only — never add physics to a meshless renderer.
+      const base = existing !== undefined ? existing.collisionMask ?? DEFAULT_COLLIDER_MASK : 0
+      const value: Record<string, unknown> = {
+        collisionMask: (strip ? base & ~CL_PHYSICS : base) | PICK_LAYER
+      }
+      // Map the renderer's shape when set; when it's unset/unmappable, omit mesh — the engine
+      // defaults both a meshless MeshRenderer and a meshless MeshCollider to a box, so they match.
+      const mesh = colliderMeshFromRenderer(renderer.mesh)
+      if (mesh !== undefined) value.mesh = mesh
+      applyOverlay(id, MESH_COLLIDER, value)
+    })
+  }
+}
+
+// Per (entity,component) physics-strip state currently applied, so we only re-apply (which reloads a
+// gltf) when it flips selected-in-gizmo <-> not, rather than every frame.
+const collStrip = new Map<string, boolean>()
+
+// Apply the editing collider overlay while not live, restore the real collider while live (interact);
+// re-apply when the strip state changes. Unlike interact's syncDisabled there's no present-guard — the
+// MeshCollider overlay is *synthesised* onto MeshRenderer entities that have no collider of their own.
+function reconcileCollider(
+  id: string,
+  name: string,
+  live: boolean,
+  strip: boolean,
+  apply: () => void
+): void {
+  const key = `${id}:${name}`
+  const overlaid = isOverlaid(originals, id, name)
+  if (live) {
+    if (overlaid) clearOverlay(id, name)
+    collStrip.delete(key)
+    return
+  }
+  if (!overlaid || collStrip.get(key) !== strip) {
+    apply()
+    collStrip.set(key, strip)
   }
 }
 
