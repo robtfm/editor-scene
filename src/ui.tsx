@@ -1671,6 +1671,70 @@ function clearParentButton(): ReactEcs.JSX.Element {
   )
 }
 
+// Create a new entity / import an asset. Live once the scene snapshot is ready.
+function addEntityButton(): ReactEcs.JSX.Element {
+  const enabled = state.status === 'ready'
+  return (
+    <UiEntity
+      key="add-entity-button"
+      uiTransform={{
+        width: 90,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: enabled ? TOGGLE_ON : BUTTON_BG }}
+      uiText={{ value: '+ Entity', fontSize: FS - 2, color: TEXT }}
+      onMouseDown={
+        enabled
+          ? () => {
+              state.newEntityOpen = true
+              state.newEntityName = ''
+            }
+          : undefined
+      }
+    />
+  )
+}
+
+function addAssetButton(): ReactEcs.JSX.Element {
+  const enabled = state.status === 'ready'
+  return (
+    <UiEntity
+      key="add-asset-button"
+      uiTransform={{
+        width: 90,
+        height: 22,
+        margin: { left: 6 },
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}
+      uiBackground={{ color: enabled ? TOGGLE_ON : BUTTON_BG }}
+      uiText={{ value: '+ Asset', fontSize: FS - 2, color: TEXT }}
+      onMouseDown={
+        enabled
+          ? () => {
+              state.assetPickerOpen = true
+              state.assetFilter = ''
+              if (state.assetCatalog.length === 0 && !state.assetBusy) {
+                state.assetBusy = true
+                fetchCatalog()
+                  .then((c) => {
+                    state.assetCatalog = c
+                  })
+                  .catch(console.error)
+                  .then(() => {
+                    state.assetBusy = false
+                  })
+              }
+            }
+          : undefined
+      }
+    />
+  )
+}
+
 const NODE_LABEL: Record<string, string> = {
   always: 'Nodes: All',
   selected: 'Nodes: Selected',
@@ -1889,7 +1953,7 @@ function controlPanel(): ReactEcs.JSX.Element {
       >
         {toolbarSection('s-tools', ACTIONS.map(actionButton), toolContext())}
         {toolbarDivider('div-1')}
-        {toolbarSection('s-parent', [parentButton(), clearParentButton()], [])}
+        {toolbarSection('s-parent', [addEntityButton(), addAssetButton()], [parentButton(), clearParentButton()])}
         {toolbarDivider('div-2')}
         {toolbarSection('s-view', [nodeDisplayButton(), linksButton()], [])}
         {toolbarDivider('div-3')}
@@ -3175,7 +3239,7 @@ export function inspectorUi(): ReactEcs.JSX.Element {
       <UiEntity
         uiTransform={{
           width: '100%',
-          height: 92,
+          height: 56,
           flexDirection: 'column',
           justifyContent: 'center',
           padding: { left: 10, right: 10 }
@@ -3192,104 +3256,17 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           }}
         />
         <UiEntity
-          uiTransform={{
-            width: '100%',
-            height: 22,
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexDirection: 'row'
+          uiTransform={{ width: '100%', height: 20, alignItems: 'center' }}
+          uiText={{
+            value: state.saveStatus !== '' ? state.saveStatus : statusText(),
+            fontSize: FS - 2,
+            color: MUTED,
+            textAlign: 'middle-left'
           }}
-        >
-          <UiEntity
-            uiTransform={{ width: 210, height: 20, alignItems: 'center' }}
-            uiText={{
-              value: state.saveStatus !== '' ? state.saveStatus : statusText(),
-              fontSize: FS - 2,
-              color: MUTED,
-              textAlign: 'middle-left'
-            }}
-          />
-          <UiEntity
-            uiTransform={{
-              width: 52,
-              height: 22,
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: { right: 4 }
-            }}
-            uiBackground={{ color: canUndo() ? BUTTON_BG : HEADER_BG }}
-            uiText={{ value: 'Undo', fontSize: FS - 1, color: canUndo() ? TEXT : MUTED }}
-            onMouseDown={() => {
-              if (canUndo()) undo().catch(console.error)
-            }}
-          />
-          <UiEntity
-            uiTransform={{
-              width: 52,
-              height: 22,
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: { right: 4 }
-            }}
-            uiBackground={{ color: canRedo() ? BUTTON_BG : HEADER_BG }}
-            uiText={{ value: 'Redo', fontSize: FS - 1, color: canRedo() ? TEXT : MUTED }}
-            onMouseDown={() => {
-              if (canRedo()) redo().catch(console.error)
-            }}
-          />
-          <UiEntity
-            uiTransform={{
-              width: 80,
-              height: 22,
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: { right: 4 }
-            }}
-            uiBackground={{ color: isLocalScene() ? BUTTON_BG : HEADER_BG }}
-            uiText={{
-              value: 'Save',
-              fontSize: FS - 1,
-              color: isLocalScene() ? TEXT : MUTED
-            }}
-            onMouseDown={() => {
-              // Disabled-looking on a non-local scene; the click still surfaces why via saveComposite.
-              saveComposite().catch(console.error)
-            }}
-          />
-          <UiEntity
-            uiTransform={{
-              width: 80,
-              height: 22,
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: { right: 4 }
-            }}
-            uiBackground={{ color: BUTTON_BG }}
-            uiText={{ value: 'Reload', fontSize: FS - 1, color: TEXT }}
-            onMouseDown={() => {
-              // Reload the scene from disk (picks up changed content files). Confirms first when
-              // there are local changes — reapply them or reset.
-              openReloadDialog().catch(console.error)
-            }}
-          />
-          <UiEntity
-            uiTransform={{
-              width: 80,
-              height: 22,
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-            uiBackground={{ color: BUTTON_BG }}
-            uiText={{ value: 'Resync', fontSize: FS - 1, color: TEXT }}
-            onMouseDown={() => {
-              // Re-pull the live scene's current state into the editor (no scene respawn).
-              refresh().catch(console.error)
-            }}
-          />
-        </UiEntity>
+        />
       </UiEntity>
 
-      {/* Tree toolbar (top-left): add entity */}
+      {/* Tree toolbar (top-left): undo/redo + save/reload/resync */}
       <UiEntity
         uiTransform={{
           width: '100%',
@@ -3300,67 +3277,72 @@ export function inspectorUi(): ReactEcs.JSX.Element {
         }}
       >
         <UiEntity
-          uiTransform={{ width: 90, height: 22, alignItems: 'center', justifyContent: 'center' }}
-          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
-          uiText={{ value: '+ Entity', fontSize: FS - 1, color: TEXT }}
-          onMouseDown={
-            state.status === 'ready'
-              ? () => {
-                  state.newEntityOpen = true
-                  state.newEntityName = ''
-                }
-              : undefined
-          }
+          uiTransform={{ width: 52, height: 22, alignItems: 'center', justifyContent: 'center' }}
+          uiBackground={{ color: canUndo() ? BUTTON_BG : HEADER_BG }}
+          uiText={{ value: 'Undo', fontSize: FS - 1, color: canUndo() ? TEXT : MUTED }}
+          onMouseDown={() => {
+            if (canUndo()) undo().catch(console.error)
+          }}
         />
         <UiEntity
           uiTransform={{
-            width: 90,
+            width: 52,
+            height: 22,
+            margin: { left: 4 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: canRedo() ? BUTTON_BG : HEADER_BG }}
+          uiText={{ value: 'Redo', fontSize: FS - 1, color: canRedo() ? TEXT : MUTED }}
+          onMouseDown={() => {
+            if (canRedo()) redo().catch(console.error)
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: 80,
+            height: 22,
+            margin: { left: 18 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{ color: isLocalScene() ? BUTTON_BG : HEADER_BG }}
+          uiText={{ value: 'Save', fontSize: FS - 1, color: isLocalScene() ? TEXT : MUTED }}
+          onMouseDown={() => {
+            // Disabled-looking on a non-local scene; the click still surfaces why via saveComposite.
+            saveComposite().catch(console.error)
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: 80,
             height: 22,
             margin: { left: 6 },
             alignItems: 'center',
             justifyContent: 'center'
           }}
-          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
-          uiText={{ value: '+ Asset', fontSize: FS - 1, color: TEXT }}
-          onMouseDown={
-            state.status === 'ready'
-              ? () => {
-                  state.assetPickerOpen = true
-                  state.assetFilter = ''
-                  if (state.assetCatalog.length === 0 && !state.assetBusy) {
-                    state.assetBusy = true
-                    fetchCatalog()
-                      .then((c) => {
-                        state.assetCatalog = c
-                      })
-                      .catch(console.error)
-                      .then(() => {
-                        state.assetBusy = false
-                      })
-                  }
-                }
-              : undefined
-          }
+          uiBackground={{ color: BUTTON_BG }}
+          uiText={{ value: 'Reload', fontSize: FS - 1, color: TEXT }}
+          onMouseDown={() => {
+            // Reload the scene from disk (picks up changed content files). Confirms first when
+            // there are local changes — reapply them or reset.
+            openReloadDialog().catch(console.error)
+          }}
         />
         <UiEntity
           uiTransform={{
-            width: 90,
+            width: 80,
             height: 22,
             margin: { left: 6 },
             alignItems: 'center',
             justifyContent: 'center'
           }}
-          uiBackground={{ color: state.status === 'ready' ? TOGGLE_ON : BUTTON_BG }}
-          uiText={{ value: 'Content', fontSize: FS - 1, color: TEXT }}
-          onMouseDown={
-            state.status === 'ready'
-              ? () => {
-                  state.contentViewerOpen = true
-                  state.contentFilter = ''
-                  loadSceneContent()
-                }
-              : undefined
-          }
+          uiBackground={{ color: BUTTON_BG }}
+          uiText={{ value: 'Resync', fontSize: FS - 1, color: TEXT }}
+          onMouseDown={() => {
+            // Re-pull the live scene's current state into the editor (no scene respawn).
+            refresh().catch(console.error)
+          }}
         />
       </UiEntity>
 
