@@ -92,9 +92,8 @@ export async function refresh(): Promise<void> {
   await reloadSnapshot()
 }
 
-// Open the reload confirm dialog (or, with no local changes, reload straight away). `killed` is the
-// editor-created entities that aren't on disk and so can't survive the reload — surfaced as a
-// warning, computed from the same baseline + editor-touched scope the save diff uses.
+// Open the reload confirm dialog (reapply local changes vs reset), or — with no local changes —
+// reload straight away.
 export async function openReloadDialog(): Promise<void> {
   if (state.scene === undefined) return
   const hasChanges =
@@ -103,27 +102,27 @@ export async function openReloadDialog(): Promise<void> {
     state.deletedEntities.size > 0
   if (!hasChanges) {
     // nothing local to keep — reapply vs reset are identical, just reload.
-    await reloadScene(false, [])
+    await reloadScene(false)
     return
   }
-  const initial = await saveBaseline()
-  state.reloadConfirm = { killed: addedAuthoredEntities(initial, state.snapshot) }
+  state.reloadConfirm = true
 }
 
 // Reload the pinned scene from disk (so changed content files — textures, audio, glbs — are picked
-// up without leaving the editor). With `reapply`, replay the editor's unsaved component
-// edits/deletions onto the entities that survive the reload; otherwise discard local changes for a
-// clean reset. The per-frame systems (overlays, pick colliders, highlight) re-apply themselves once
-// the snapshot + selection are restored.
-//
-// Phase 1: only edits to on-disk entities are restored. The editor-created entities in `killed`
-// (never written to disk) can't be reinstantiated at their old ids here, so they're dropped.
-export async function reloadScene(reapply: boolean, killed: string[]): Promise<void> {
+// up without leaving the editor). With `reapply`, replay the editor's unsaved changes onto the fresh
+// scene — including recreating editor-created entities at their original ids (lossless); otherwise
+// discard local changes for a clean reset. The per-frame systems (overlays, pick colliders,
+// highlight) re-apply themselves once the snapshot + selection are restored.
+export async function reloadScene(reapply: boolean): Promise<void> {
   const scene = state.scene
   if (scene === undefined) return
   const wasFrozen = state.frozen
   const selected = [...state.selected]
   const active = state.activeEntity
+
+  // Identify the editor-created entities (not on disk) to recreate — from the *pre-reload* snapshot,
+  // since the reload wipes them from view.
+  const recreate = reapply ? addedAuthoredEntities(await saveBaseline(), state.snapshot) : []
 
   // The old scene's engine-side overlays/highlight are wiped with it. Forget our bookkeeping so the
   // first post-reload snapshot isn't reverted against dead overlays and the reconcilers re-apply.
@@ -148,13 +147,13 @@ export async function reloadScene(reapply: boolean, killed: string[]): Promise<v
   let status: string
   if (reapply) {
     // Replay while the fresh scene is playing, so the writes tick in (a frozen scene never processes
-    // inbound CRDT messages); prune the dropped (un-restorable) entities from the changelog.
-    await reapplyChangelog(killed)
+    // inbound CRDT messages). `failed` = entities whose original id collided on the fresh scene.
+    const failed = await reapplyChangelog(recreate)
     await sleep(SETTLE_MS)
     await reloadSnapshot()
     status =
-      killed.length > 0
-        ? `reloaded — dropped ${killed.length} unsaved new ${killed.length === 1 ? 'entity' : 'entities'} (save first to keep)`
+      failed.length > 0
+        ? `reloaded — ${failed.length} new ${failed.length === 1 ? 'entity' : 'entities'} couldn't be restored (id taken)`
         : 'reloaded'
   } else {
     resetSaveChangelog()
@@ -183,13 +182,14 @@ async function waitForSceneReady(hash: string): Promise<void> {
   }
 }
 
-// Re-apply the editor's recorded changes onto the freshly-reloaded scene: edited components on
-// surviving entities are re-written, deleted components/entities re-deleted. `killed` (editor-created
-// entities not on disk) are skipped and pruned from the changelog so a later save stays consistent.
-// Runs against state.snapshot, which reflects the on-disk state at call time.
-async function reapplyChangelog(killed: string[]): Promise<void> {
-  const lost = new Set(killed)
-
+// Re-apply the editor's recorded changes onto the freshly-reloaded scene: edited components are
+// re-written, deleted components/entities re-deleted, and the editor-created entities in `recreate`
+// (not on disk) are reinstantiated at their original ids via /new_entity --ids. Because ids are
+// preserved, the recorded component values (which reference those ids for parent/self) resolve as-is
+// — no remap. A recreated id that collides with a live one on the fresh scene is the runtime-
+// divergence edge: it's dropped (and pruned from the changelog) and returned, rather than failing
+// the whole reapply. Runs against state.snapshot, which reflects the on-disk state at call time.
+async function reapplyChangelog(recreate: string[]): Promise<string[]> {
   // Re-delete entities the editor removed (they come back on reload).
   for (const id of state.deletedEntities) {
     if (id in state.snapshot) {
@@ -199,12 +199,31 @@ async function reapplyChangelog(killed: string[]): Promise<void> {
     }
   }
 
-  // Re-write edited components on surviving entities.
+  // Recreate the session-created entities at their original ids (instantiated with their Name),
+  // before any components are written so parent refs to them resolve. A collision drops the entity.
+  const failed = new Set<string>()
+  if (recreate.length > 0) {
+    const names = recreate.map(
+      (id) =>
+        (state.editorValues.get(`${id}/${NAME_COMPONENT}`) as { value: string } | undefined) ?? {
+          value: 'Entity'
+        }
+    )
+    const got = await allocateNamedEntities(names, recreate.map(Number))
+    recreate.forEach((id, i) => {
+      if (got[i] === null) {
+        failed.add(id)
+        console.error('reapply: could not recreate entity at original id', id)
+      }
+    })
+  }
+
+  // Re-write edited components on present entities (surviving on-disk + recreated).
   for (const ckey of state.editedComponents) {
     const slash = ckey.indexOf('/')
     const entityId = ckey.slice(0, slash)
     const name = ckey.slice(slash + 1)
-    if (state.deletedEntities.has(entityId) || lost.has(entityId)) continue
+    if (state.deletedEntities.has(entityId) || failed.has(entityId)) continue
     if (!(entityId in state.snapshot)) continue
     const value = state.editorValues.get(ckey)
     if (value === undefined) continue
@@ -225,13 +244,14 @@ async function reapplyChangelog(killed: string[]): Promise<void> {
     }
   }
 
-  // Prune changelog entries for the dropped entities, so a later save stays consistent.
+  // Prune changelog entries for entities that couldn't be recreated, so a later save stays consistent.
   for (const ckey of [...state.editedComponents]) {
-    if (lost.has(ckey.slice(0, ckey.indexOf('/')))) {
+    if (failed.has(ckey.slice(0, ckey.indexOf('/')))) {
       state.editedComponents.delete(ckey)
       state.editorValues.delete(ckey)
     }
   }
+  return [...failed]
 }
 
 // Sync the local frozen flag from the pinned scene's actual status (it may
@@ -454,17 +474,26 @@ export async function addComponent(entityId: string, name: string): Promise<void
 
 // Allocate `count` fresh entity ids from the engine's authoritative allocator (collision-free,
 // correctly generationed), each instantiated scene-side with the given component so @dcl/ecs adopts
-// it. Returns the proto-u32 ids (matching the snapshot's keys).
+// it. Returns the proto-u32 ids (matching the snapshot's keys). With `explicitId`, the engine
+// instantiates that exact id instead of allocating (to recreate an entity at its original id on a
+// freshly-reloaded scene); the reply is empty if that id collided with a live one.
 async function newEntityIds(
   componentId: number,
   base64: string,
-  count: number
+  count: number,
+  explicitId?: number
 ): Promise<number[]> {
-  const reply = await BevyApi.consoleCommand('new_entity', [
-    String(componentId),
-    base64,
-    String(count)
-  ])
+  const args = [String(componentId), base64, String(count)]
+  if (explicitId !== undefined) args.push('--ids', String(explicitId))
+  // An explicit-id request rejects (command-failed) when the id collides with a live one; surface
+  // that as no ids so the caller records a per-entity failure rather than throwing.
+  let reply: string
+  try {
+    reply = await BevyApi.consoleCommand('new_entity', args)
+  } catch (e) {
+    if (explicitId !== undefined) return []
+    throw e
+  }
   const ids = JSON.parse(reply) as unknown
   return Array.isArray(ids) ? ids.filter((n): n is number => typeof n === 'number') : []
 }
@@ -482,12 +511,17 @@ async function newEntityIds(
 // /new_entity, so @dcl/ecs adopts it before the next tick) and the Name recorded as our edit so it
 // persists on save. Returns the new ids 1:1 with `names` (null where allocation failed). Shared by
 // single-entity creation and composite import (which needs all ids up front to remap parent refs).
+// With `ids` (parallel to `names`), each entity is recreated at that exact original id instead of a
+// fresh allocation — used by reapply to restore session-created entities on a reloaded scene. A
+// requested id that collides with a live one yields null at that slot.
 export async function allocateNamedEntities(
-  names: Array<{ value: string }>
+  names: Array<{ value: string }>,
+  ids?: Array<number>
 ): Promise<Array<number | null>> {
   const nameId = customComponentId(NAME_COMPONENT)
   const out: Array<number | null> = []
-  for (const name of names) {
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i]
     const nameBytes =
       nameId !== undefined ? encodeCustomComponent(NAME_COMPONENT, name) : undefined
     if (nameId === undefined || nameBytes === undefined) {
@@ -495,7 +529,7 @@ export async function allocateNamedEntities(
       out.push(null)
       continue
     }
-    const [id] = await newEntityIds(nameId, nameBytes, 1)
+    const [id] = await newEntityIds(nameId, nameBytes, 1, ids?.[i])
     if (id === undefined) {
       out.push(null)
       continue

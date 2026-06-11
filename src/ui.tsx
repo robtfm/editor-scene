@@ -1961,13 +1961,12 @@ function parentDialog(): ReactEcs.JSX.Element | null {
 }
 
 // Reload confirm dialog: reload the scene from disk, choosing whether to reapply the editor's local
-// changes or reset to the on-disk state. Warns when unsaved new entities can't be restored.
+// changes (lossless — editor-created entities are recreated at their original ids) or reset to the
+// on-disk state.
 function reloadDialog(): ReactEcs.JSX.Element | null {
-  const confirm = state.reloadConfirm
-  if (confirm === null) return null
-  const killed = confirm.killed.length
+  if (!state.reloadConfirm) return null
   const close = (): void => {
-    state.reloadConfirm = null
+    state.reloadConfirm = false
   }
   return (
     <UiEntity
@@ -2014,31 +2013,16 @@ function reloadDialog(): ReactEcs.JSX.Element | null {
             textAlign: 'top-left'
           }}
         />
-        {killed > 0 ? (
-          <UiEntity
-            uiTransform={{ width: '100%', height: 34, margin: { bottom: 6 } }}
-            uiText={{
-              value:
-                `⚠ ${killed} unsaved new ${killed === 1 ? 'entity' : 'entities'} can't be restored on ` +
-                'reload and will be lost. Cancel and save first to keep them.',
-              fontSize: FS - 2,
-              color: WARN,
-              textAlign: 'top-left'
-            }}
-          />
-        ) : (
-          []
-        )}
         <UiEntity
           uiTransform={{ width: '100%', height: 30, flexDirection: 'row', alignItems: 'center' }}
         >
           {dialogButton('Reapply changes', 150, BUTTON_BG, () => {
             close()
-            reloadScene(true, confirm.killed).catch(console.error)
+            reloadScene(true).catch(console.error)
           })}
           {dialogButton('Reset (discard)', 140, REVERT_BG, () => {
             close()
-            reloadScene(false, confirm.killed).catch(console.error)
+            reloadScene(false).catch(console.error)
           })}
           {dialogButton('Cancel', 80, HEADER_BG, close)}
         </UiEntity>

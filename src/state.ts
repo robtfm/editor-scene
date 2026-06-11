@@ -117,9 +117,8 @@ export const state = {
   schemaPending: new Set<string>(),
   // true while the non-uniform-parent reparent confirm dialog is open
   parentConfirm: false,
-  // reload confirm dialog: null when closed, else the editor-created entity ids that won't survive
-  // the reload (so the user can choose to reapply changes or reset, knowing what's lost).
-  reloadConfirm: null as { killed: string[] } | null,
+  // true while the reload confirm dialog (reapply local changes vs reset) is open
+  reloadConfirm: false,
   // entity id whose delete button is hovered (for the modifier tooltip), or null
   hoveredDelete: null as string | null,
   // current multi-selection (tree + markers). The gizmo anchors on activeEntity
