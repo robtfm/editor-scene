@@ -8,10 +8,10 @@
 //   - reads stdin lines you type and forwards them as commands.
 //
 // stdin protocol (one per line):
-//   - a JSON envelope, sent as-is:   {"cmd":"set_component","args":["0","Transform","{...}"]}
-//   - a bare command name (no args): component_names
+//   - a JSON envelope, sent as-is:   {"action":"setComponent","params":{"entity":"514","component":"Transform","value":{...}}}
+//   - a bare action name (no params): getSnapshot
 //
-// `cmd` is a console command WITHOUT the leading slash; `args` are its string arguments.
+// Actions route through the editor's verbs (captured/undoable). See src/agent.ts for the set.
 
 import { WebSocketServer } from 'ws'
 import http from 'node:http'
@@ -120,7 +120,7 @@ rl.on('line', (line) => {
       return
     }
   } else {
-    obj = { cmd: trimmed }
+    obj = { action: trimmed }
   }
   send(current, obj)
 })
