@@ -12,6 +12,8 @@ import {
   deleteEntityReparent,
   reparentEntity,
   duplicateSelection,
+  componentCatalog,
+  componentDefault,
   undo,
   redo
 } from './inspector'
@@ -124,6 +126,17 @@ async function dispatch(action: string, params: any): Promise<unknown> {
     // Read the current editor selection — so an agent can act on what the user clicked.
     case 'getSelection':
       return { selected: [...state.selected], active: state.activeEntity }
+
+    // Discovery: the addable component catalog, { protocol: [...], custom: [...] }. Custom components
+    // round-trip by name with decoded JSON through getSnapshot/setComponent like protocol ones.
+    case 'getComponentNames':
+      return await componentCatalog()
+
+    // Discovery: a component's default value (shape reference), so an agent can author it correctly.
+    case 'getComponentDefault': {
+      const component = requireStr(params.component, 'component')
+      return { component, default: await componentDefault(component) }
+    }
 
     // Set (or create) a component's value. `value` may be an object or a JSON string.
     case 'setComponent': {

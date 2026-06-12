@@ -63,6 +63,8 @@ compose as code.
 |---|---|---|
 | `getSnapshot` | — | logical scene state (overlays reverted), `{ entityId: { Component: value } }` |
 | `getSelection` | — | `{ selected: string[], active }` — what the user has selected in the editor |
+| `getComponentNames` | — | addable component catalog: `{ protocol: string[], custom: string[] }` |
+| `getComponentDefault` | `{component}` | a component's default value (shape reference), protocol or custom |
 | `setComponent` | `{entity, component, value}` | set/create a component (`value` object or JSON string) |
 | `deleteComponent` | `{entity, component}` | remove a component |
 | `addComponent` | `{entity, component}` | add a component at its default value |
@@ -80,7 +82,10 @@ Wire protocol: `{ id?, action, params? }` → `{ id, ok: true, result }` or `{ i
 ## Conventions
 
 - Entity ids are strings; the player is `1`, the scene root is `0`.
-- Protocol components appear by name (`Transform`, `GltfContainer`, …); custom components by id.
+- Components appear by name — protocol (`Transform`, `GltfContainer`) and custom
+  (`core-schema::Name`, `asset-packs::Actions`) alike, with decoded JSON values; `setComponent`
+  encodes custom ones back automatically. Only a custom component with no SDK schema stays as a raw
+  numeric-id `"ts:base64"` entry. Use `getComponentNames` to discover addable names.
 - `Transform` is `{ parent, position{x,y,z}, rotation{x,y,z,w}, scale{x,y,z} }` — note `position`,
   not `translation`.
 - `worldPos` walks `Transform.parent` to root, summing positions (ignores parent rotation/scale —

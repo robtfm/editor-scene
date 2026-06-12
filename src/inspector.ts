@@ -35,6 +35,7 @@ import {
   decodeCustomComponents,
   isCustomComponent,
   customComponentId,
+  customComponentNames,
   customTimestamp,
   noteCustomTimestamp,
   encodeCustomComponent,
@@ -516,6 +517,21 @@ export async function loadComponentNames(): Promise<void> {
   } catch (e) {
     console.error('component_names failed:', e)
   }
+}
+
+// Discovery for the agent channel: the addable component catalog — writable protocol names (from
+// the engine's /component_names) plus addable custom names. Refreshes the protocol list first.
+export async function componentCatalog(): Promise<{ protocol: string[]; custom: string[] }> {
+  await loadComponentNames()
+  return { protocol: [...state.componentNames], custom: customComponentNames() }
+}
+
+// A component's default value (its full default shape) — protocol from the engine, custom from its
+// SDK schema. Read-only (touches no entity); lets an agent learn a component's shape before adding.
+export async function componentDefault(name: string): Promise<unknown> {
+  if (isCustomComponent(name)) return createCustomDefault(name) ?? {}
+  const reply = await BevyApi.consoleCommand('component_default', [name])
+  return JSON.parse(reply)
 }
 
 // Add a component, seeded with its full default shape. /component_default returns

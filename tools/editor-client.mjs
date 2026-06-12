@@ -92,6 +92,14 @@ export class EditorChannel {
   getSelection() {
     return this.call('getSelection')
   }
+  // Addable component catalog: { protocol: string[], custom: string[] }.
+  getComponentNames() {
+    return this.call('getComponentNames')
+  }
+  // A component's default value (shape reference) — protocol or custom, by name.
+  getComponentDefault(component) {
+    return this.call('getComponentDefault', { component })
+  }
   setComponent(entity, component, value) {
     return this.call('setComponent', { entity: String(entity), component, value })
   }
