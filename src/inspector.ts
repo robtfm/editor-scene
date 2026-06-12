@@ -1166,6 +1166,25 @@ export async function clearParentOfSelection(): Promise<void> {
   commitTxn()
 }
 
+// Reparent a single entity under `parent` ('0' = scene root), preserving world placement
+// (localRelativeTo recomputes the local Transform wrt the new parent). One undo step. Used by the
+// agent channel; the GUI uses the selection-based variants above.
+export async function reparentEntity(child: string, parent: string): Promise<void> {
+  const snap = state.snapshot
+  if (child === parent) throw new Error('cannot parent an entity to itself')
+  if (parent !== '0' && !(parent in snap)) throw new Error(`no such parent entity: ${parent}`)
+  if (isAncestorOf(snap, child, parent)) throw new Error('would create a parent cycle')
+
+  beginTxn('Reparent')
+  try {
+    const local = localRelativeTo(snap, child, parent)
+    await writeComponent(child, 'Transform', JSON.stringify({ ...local, parent: Number(parent) }))
+    await reloadAfter()
+  } finally {
+    commitTxn()
+  }
+}
+
 // Whether any selected entity currently has a non-root parent.
 export function selectionHasParented(): boolean {
   for (const id of state.selected) {

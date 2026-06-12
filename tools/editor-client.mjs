@@ -89,6 +89,9 @@ export class EditorChannel {
   getSnapshot() {
     return this.call('getSnapshot')
   }
+  getSelection() {
+    return this.call('getSelection')
+  }
   setComponent(entity, component, value) {
     return this.call('setComponent', { entity: String(entity), component, value })
   }
@@ -101,8 +104,21 @@ export class EditorChannel {
   addEntity(name, parent = 0) {
     return this.call('addEntity', { name, parent })
   }
+  // The engine asset-packs catalog: [{ id, name, category, tags, pack, thumbnail }].
+  getCatalog() {
+    return this.call('getCatalog')
+  }
+  // Instantiate a catalog asset (by `id` from getCatalog) into the scene; selects its root.
+  importAsset(assetId, parent = 0, name) {
+    return this.call('importAsset', { assetId: String(assetId), parent, name })
+  }
   deleteEntity(entity, mode) {
     return this.call('deleteEntity', { entity: String(entity), mode })
+  }
+  // Reparent under `parent` (0 = root). Refuses if the parent has non-uniform world scale (would
+  // shear) unless force=true; the resolved reply then carries a `warning`.
+  reparent(entity, parent = 0, force = false) {
+    return this.call('reparent', { entity: String(entity), parent, force })
   }
   select(entities) {
     return this.call('select', { entities: entities.map(String) })

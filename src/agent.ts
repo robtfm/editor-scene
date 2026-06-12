@@ -1,5 +1,7 @@
 import { state, componentKey, clearSelection, selectionClick, selectEntityInTree } from './state'
 import { logicalSnapshot } from './overlays'
+import { isWorldScaleNonUniform } from './world-pos'
+import { fetchCatalog, importAsset } from './import'
 import {
   setComponentValue,
   deleteComponent,
@@ -8,6 +10,7 @@ import {
   deleteEntity,
   deleteEntityRecursive,
   deleteEntityReparent,
+  reparentEntity,
   duplicateSelection,
   undo,
   redo
@@ -20,6 +23,10 @@ import {
 // be. Reads return the editor's logical snapshot (overlays reverted), not the raw CRDT.
 
 const DEFAULT_URL = 'ws://127.0.0.1:8787'
+
+// Whether the engine asset catalog has been primed this session (so importAsset's /init_asset has a
+// cache). The engine cache outlives reconnects, so once true it stays true.
+let catalogLoaded = false
 
 // Inbound message: { id?, action, params? }. `id` (if present) is echoed back so the agent can
 // correlate the reply. Reply: { id, ok: true, result } or { id, ok: false, error }.
@@ -114,6 +121,10 @@ async function dispatch(action: string, params: any): Promise<unknown> {
     case 'getSnapshot':
       return logicalSnapshot(state.snapshot)
 
+    // Read the current editor selection — so an agent can act on what the user clicked.
+    case 'getSelection':
+      return { selected: [...state.selected], active: state.activeEntity }
+
     // Set (or create) a component's value. `value` may be an object or a JSON string.
     case 'setComponent': {
       const entity = requireStr(params.entity, 'entity')
@@ -159,6 +170,29 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       return { entity, mode: params.mode ?? 'self', status: 'deleted' }
     }
 
+    // Reparent an entity under `parent` ('0' = root), preserving world placement. One undo step.
+    // If the target parent has non-uniform world scale, placement (rotation/scale) can't be kept
+    // (shear a TRS Transform can't store) — refuse unless params.force is true, mirroring the GUI's
+    // confirm dialog, and report the caveat back when forced.
+    case 'reparent': {
+      const entity = requireStr(params.entity, 'entity')
+      const parent = params.parent === undefined ? '0' : String(params.parent)
+      const shear = parent !== '0' && isWorldScaleNonUniform(state.snapshot, parent)
+      if (shear && params.force !== true) {
+        throw new Error(
+          `parent ${parent} has non-uniform world scale: world placement (rotation/scale) cannot ` +
+            `be preserved on reparent (shear). Re-call with force: true to reparent anyway.`
+        )
+      }
+      await reparentEntity(entity, parent)
+      return {
+        entity,
+        parent,
+        status: 'reparented',
+        ...(shear ? { warning: 'world placement not preserved: non-uniform parent scale' } : {})
+      }
+    }
+
     // Set the editor selection (also what the component panel and duplicate act on).
     case 'select': {
       const entities = Array.isArray(params.entities) ? params.entities.map(String) : []
@@ -181,6 +215,29 @@ async function dispatch(action: string, params: any): Promise<unknown> {
     case 'redo': {
       await redo()
       return { status: 'redone' }
+    }
+
+    // The engine-provided asset-packs catalog: [{ id, name, category, tags, pack, thumbnail }].
+    // Fetching it also primes the engine cache that importAsset's /init_asset needs.
+    case 'getCatalog': {
+      const catalog = await fetchCatalog()
+      catalogLoaded = true
+      return catalog
+    }
+
+    // Instantiate a catalog asset into the current scene under `parent` (0 = root; unparented spawns
+    // in front of the player), selecting its root. The engine copies the asset's files into the
+    // scene content map. One reload-undo step. Pass `name` (from the catalog entry) for a good label.
+    case 'importAsset': {
+      const assetId = requireStr(params.assetId, 'assetId')
+      if (!catalogLoaded) {
+        await fetchCatalog()
+        catalogLoaded = true
+      }
+      const parent = typeof params.parent === 'number' ? params.parent : 0
+      const name = typeof params.name === 'string' ? params.name : 'Asset'
+      await importAsset(assetId, parent, name)
+      return { assetId, parent, root: state.activeEntity, status: 'imported' }
     }
 
     default:

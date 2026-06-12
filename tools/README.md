@@ -10,17 +10,38 @@ saveable). There is no raw console access: an agent can only do what the editor 
 ## Quick start
 
 ```bash
-nvm use 20
 node tools/agent-server.mjs        # WS on :8787, HTTP control on :8788
 ```
 
 Press **Connect** in the editor. Then either type actions on the harness's stdin, `curl` the
-HTTP control endpoint, or — for real work — script against the library.
+HTTP control endpoint, or — for a self-contained task — script against the library directly.
 
-## Scripting (the intended path)
+> Only one process can bind `:8787`. Run *either* the harness *or* a `serve()` script (below), not
+> both. The scene connects to whichever server is up when you press Connect; if you restart the
+> server (or it exits), press **Connect** again.
 
-Write code against `editor-client.mjs`. Read state once, compute in your own runtime, write back —
-don't round-trip per entity.
+## Driving across a multi-turn session (recommended for an agent)
+
+Keep the harness running in the **background** so the server is persistent and the scene stays
+connected across turns, then drive it with `curl`. (A one-shot `serve()` script, by contrast, owns
+the server and drops the connection when it exits — fine for a single task, not a session.)
+
+```bash
+node tools/agent-server.mjs &      # leave running; press Connect once
+
+# each command is a POST to the HTTP control endpoint; reply is { ok, result } / { ok, error }
+curl -s -X POST http://127.0.0.1:8788 -d '{"action":"getSnapshot"}'
+curl -s -X POST http://127.0.0.1:8788 \
+  -d '{"action":"setComponent","params":{"entity":"514","component":"Transform","value":{...}}}'
+```
+
+For heavy reads (the whole snapshot), save the reply to a file and compute over it with a `node`
+script — don't paste it back through context.
+
+## Scripting a one-shot task
+
+Write code against `editor-client.mjs` (this script owns the server, so don't also run the
+harness). Read state once, compute in your own runtime, write back — don't round-trip per entity.
 
 ```js
 import { EditorChannel, worldPos, entitiesWith, nearest } from './editor-client.mjs'
@@ -41,11 +62,15 @@ compose as code.
 | action | params | effect |
 |---|---|---|
 | `getSnapshot` | — | logical scene state (overlays reverted), `{ entityId: { Component: value } }` |
+| `getSelection` | — | `{ selected: string[], active }` — what the user has selected in the editor |
 | `setComponent` | `{entity, component, value}` | set/create a component (`value` object or JSON string) |
 | `deleteComponent` | `{entity, component}` | remove a component |
 | `addComponent` | `{entity, component}` | add a component at its default value |
 | `addEntity` | `{name?, parent?}` | create an entity (unparented spawns in front of the player) |
 | `deleteEntity` | `{entity, mode?}` | `self` (default) / `recursive` (with children) / `reparent` (keep children) |
+| `reparent` | `{entity, parent?, force?}` | reparent under `parent` (`0`/omitted = root), preserving world placement; refuses (error) if the parent has non-uniform world scale unless `force:true`, then replies with a `warning` |
+| `getCatalog` | — | the engine asset-packs catalog: `[{ id, name, category, tags, pack, thumbnail }]` |
+| `importAsset` | `{assetId, parent?, name?}` | instantiate a catalog asset into the scene (engine copies its files in); selects the root |
 | `select` | `{entities: string[]}` | set the editor selection (what the panel + `duplicate` act on) |
 | `duplicate` | — | duplicate the current selection (one undo step) |
 | `undo` / `redo` | — | step editor history |
