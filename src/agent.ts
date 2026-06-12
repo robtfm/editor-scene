@@ -14,6 +14,9 @@ import {
   duplicateSelection,
   componentCatalog,
   componentDefault,
+  beginAgentTxn,
+  endAgentTxn,
+  isAgentTxnOpen,
   undo,
   redo
 } from './inspector'
@@ -65,6 +68,9 @@ export function connectAgent(url: string = DEFAULT_URL): void {
   }
   socket.onclose = () => {
     console.log('[agent] closed')
+    // Don't strand an open transaction (suppressUndo/deferReload stuck) if the agent drops mid-way:
+    // commit what was done so far so it's consistent and undoable.
+    if (isAgentTxnOpen()) endAgentTxn().catch((e) => console.error('[agent] txn auto-close failed', e))
     if (state.agentSocket === socket) {
       state.agentSocket = null
       state.agentStatus = 'disconnected'
@@ -169,8 +175,10 @@ async function dispatch(action: string, params: any): Promise<unknown> {
     case 'addEntity': {
       const name = typeof params.name === 'string' ? params.name : 'Entity'
       const parent = typeof params.parent === 'number' ? params.parent : 0
-      await addEntity(name, parent)
-      return { name, parent, status: 'created' }
+      // addEntity returns the allocated id (not from selection), so concurrent addEntity calls each
+      // get their own id correctly.
+      const id = await addEntity(name, parent)
+      return { id, name, parent, status: 'created' }
     }
 
     // Delete an entity. mode: 'self' (default, orphans children), 'recursive' (with children),
@@ -221,6 +229,18 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       return { selected: [...state.selected], status: 'duplicated' }
     }
 
+    // Open a transaction: subsequent actions collapse into one undo step with a single settle at
+    // endTransaction. Lets an agent spawn/edit many entities efficiently and reversibly.
+    case 'beginTransaction': {
+      const label = typeof params.label === 'string' ? params.label : 'Agent transaction'
+      beginAgentTxn(label)
+      return { status: 'transaction open', label }
+    }
+    case 'endTransaction': {
+      await endAgentTxn()
+      return { status: 'transaction committed' }
+    }
+
     case 'undo': {
       await undo()
       return { status: 'undone' }
@@ -250,7 +270,9 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       const parent = typeof params.parent === 'number' ? params.parent : 0
       const name = typeof params.name === 'string' ? params.name : 'Asset'
       await importAsset(assetId, parent, name)
-      return { assetId, parent, root: state.activeEntity, status: 'imported' }
+      // importAsset selects the imported asset's root — return its id (named `id` to match
+      // addEntity) so the agent can configure/reparent it in follow-up actions.
+      return { assetId, parent, id: state.activeEntity, status: 'imported' }
     }
 
     default:

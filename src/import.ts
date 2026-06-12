@@ -355,11 +355,15 @@ async function importAssetInner(assetId: string, parent: number, assetName: stri
   }
   if (wrapperNew !== null) mainNew = wrapperNew
 
-  // Wait (bounded) for the scene to tick the imported entities in, then select the root.
-  for (let attempt = 0; attempt < 6; attempt++) {
-    await sleep(150)
-    await reloadSnapshot()
-    if (mainNew === null || state.snapshot[String(mainNew)] !== undefined) break
+  // Wait (bounded) for the scene to tick the imported entities in, then select the root. Inside an
+  // agent transaction the settle is deferred to endAgentTxn; the optimistic snapshot already carries
+  // the imported entities, so skip the per-import settle here.
+  if (!state.deferReload) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await sleep(150)
+      await reloadSnapshot()
+      if (mainNew === null || state.snapshot[String(mainNew)] !== undefined) break
+    }
   }
   if (mainNew !== null) {
     const eid = String(mainNew)

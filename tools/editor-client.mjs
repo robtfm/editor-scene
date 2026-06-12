@@ -140,6 +140,22 @@ export class EditorChannel {
   redo() {
     return this.call('redo')
   }
+  beginTransaction(label) {
+    return this.call('beginTransaction', { label })
+  }
+  endTransaction() {
+    return this.call('endTransaction')
+  }
+  // Run fn between begin/endTransaction so its actions collapse to one undo step + one settle.
+  // Ends the transaction even if fn throws.
+  async transaction(label, fn) {
+    await this.beginTransaction(label)
+    try {
+      return await fn()
+    } finally {
+      await this.endTransaction()
+    }
+  }
 
   close() {
     if (this._wss) this._wss.close()

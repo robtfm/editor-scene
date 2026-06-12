@@ -422,7 +422,7 @@ export async function reloadSnapshot(): Promise<void> {
 // skip the refetch entirely while frozen.
 const SETTLE_MS = 150
 export async function reloadAfter(goneIds: string[] = []): Promise<void> {
-  if (state.frozen) return
+  if (state.frozen || state.deferReload) return
   for (let attempt = 0; attempt < 6; attempt++) {
     await sleep(SETTLE_MS)
     await reloadSnapshot()
@@ -674,6 +674,10 @@ export async function createEntities(
       }
     }
 
+    // Inside an agent transaction the settle is deferred to one reload at endAgentTxn; the optimistic
+    // local snapshot (writeComponent) already carries the new entities for subsequent ops.
+    if (state.deferReload) return ids
+
     // Wait (bounded) for the running scene to tick the new entities in before refetching, so a
     // refetch doesn't briefly drop them (and strand a selection on them).
     const last = ids.length > 0 ? String(ids[ids.length - 1]) : null
@@ -711,11 +715,42 @@ export async function recordEntityChange(
   pushReloadEntry(label, typeof target === 'string' ? target : '', before, snapshotChangelog())
 }
 
+// --- agent transactions ---
+// Hold one undo step + one settle open across many actions (the agent's beginTransaction /
+// endTransaction). While open, suppressUndo groups everything into a single reload undo entry and
+// deferReload skips per-op settles; the optimistic local snapshot carries edits between ops so later
+// ops see earlier ones. endAgentTxn pushes the entry and settles once.
+let agentTxn: { label: string; before: ReturnType<typeof snapshotChangelog> } | null = null
+
+export function isAgentTxnOpen(): boolean {
+  return agentTxn !== null
+}
+
+export function beginAgentTxn(label: string): void {
+  if (agentTxn !== null) throw new Error('a transaction is already open')
+  agentTxn = { label, before: snapshotChangelog() }
+  state.suppressUndo = true
+  state.deferReload = true
+}
+
+export async function endAgentTxn(): Promise<void> {
+  const txn = agentTxn
+  if (txn === null) throw new Error('no open transaction')
+  agentTxn = null
+  state.suppressUndo = false
+  state.deferReload = false
+  pushReloadEntry(txn.label, '', txn.before, snapshotChangelog())
+  await reloadAfter()
+}
+
 // Create a single authored entity with a default Transform and a Name, then select it. Mirrors the
 // Hub's addChild operation. The new entity — root or child — is placed in front of the player (at the
 // same world point, converted to `parent`'s local frame) and the translate tool auto-selected, so it
 // spawns in view and ready to position.
-export async function addEntity(name: string, parent: number): Promise<void> {
+export async function addEntity(name: string, parent: number): Promise<string | null> {
+  // Captured from the allocation (not state.activeEntity) so the returned id is correct even when
+  // addEntity calls run concurrently — concurrent calls clobber the shared selection, not this.
+  let created: string | null = null
   await recordEntityChange('Create', async () => {
     const ids = await createEntities([
       {
@@ -731,6 +766,7 @@ export async function addEntity(name: string, parent: number): Promise<void> {
     ])
     if (ids.length === 0) return
     const eid = String(ids[0])
+    created = eid
     state.selected.clear()
     state.selected.add(eid)
     state.activeEntity = eid
@@ -756,6 +792,7 @@ export async function addEntity(name: string, parent: number): Promise<void> {
     setActiveAction('translate')
     return entityDisplay(state.snapshot, eid)
   })
+  return created
 }
 
 // Duplicate the selected entities and their descendants: allocate fresh ids, copy each one's savable

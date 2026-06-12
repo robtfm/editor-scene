@@ -179,6 +179,9 @@ export const state = {
 
   // true while a long op (reload-reapply, undo/redo settle) is in flight — drives the busy spinner.
   busy: false,
+  // true while an agent transaction is open: per-op settle/reload is deferred to one settle at the
+  // end (suppressUndo handles the single-undo-step grouping; see begin/endAgentTxn).
+  deferReload: false,
   // which history button is hovered ('undo'/'redo'), for the next-action tooltip; null = none.
   hoveredHistory: null as 'undo' | 'redo' | null,
 

@@ -54,6 +54,39 @@ t.position.y += 1
 await ch.setComponent(e, 'Transform', t)         // captured → undoable
 ```
 
+## Transactions
+
+Wrap many actions into **one undo step** with a **single settle** (otherwise each mutation settles
+and lands as its own history entry). Because each call still round-trips, you can use an entity id
+returned by `addEntity` or `importAsset` (both reply with `{ id }`) in a later action within the
+same transaction.
+
+Pipeline the work — `await`ing each call in series pays a full frame (~16ms) of round-trip latency
+*per command*, but the engine processes many per frame, so firing them concurrently is ~18× faster.
+`addEntity` returns its `id` from allocation (not the selection), so concurrent calls are safe.
+Compose the bulk operation in your own code — there's no bulk primitive:
+
+```js
+await ch.transaction('Spawn 100 cubes', async () => {
+  // phase 1: create all, concurrently → ids
+  const ids = await Promise.all(
+    Array.from({ length: 100 }, () => ch.addEntity('Cube', 0).then((r) => r.id))
+  )
+  // phase 2: configure all, concurrently (disjoint writes, so no contention)
+  await Promise.all(ids.flatMap((id, i) => [
+    ch.setComponent(id, 'Transform', {
+      position: { x: i % 10, y: 1, z: Math.floor(i / 10) },
+      rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 1, y: 1, z: 1 }, parent: 0
+    }),
+    ch.setComponent(id, 'MeshRenderer', { mesh: { box: { uvs: [] } } })
+  ]))
+})
+// one Undo removes all 100 cubes
+```
+
+If the agent disconnects mid-transaction, the channel auto-commits what was done (so it stays
+consistent and undoable).
+
 ## Actions (privileged primitives)
 
 These need the editor's authority; everything else (proximity, filtering, batch logic) you
@@ -68,14 +101,15 @@ compose as code.
 | `setComponent` | `{entity, component, value}` | set/create a component (`value` object or JSON string) |
 | `deleteComponent` | `{entity, component}` | remove a component |
 | `addComponent` | `{entity, component}` | add a component at its default value |
-| `addEntity` | `{name?, parent?}` | create an entity (unparented spawns in front of the player) |
+| `addEntity` | `{name?, parent?}` | create an entity (unparented spawns in front of the player); replies `{ id }` |
 | `deleteEntity` | `{entity, mode?}` | `self` (default) / `recursive` (with children) / `reparent` (keep children) |
 | `reparent` | `{entity, parent?, force?}` | reparent under `parent` (`0`/omitted = root), preserving world placement; refuses (error) if the parent has non-uniform world scale unless `force:true`, then replies with a `warning` |
 | `getCatalog` | — | the engine asset-packs catalog: `[{ id, name, category, tags, pack, thumbnail }]` |
-| `importAsset` | `{assetId, parent?, name?}` | instantiate a catalog asset into the scene (engine copies its files in); selects the root |
+| `importAsset` | `{assetId, parent?, name?}` | instantiate a catalog asset into the scene (engine copies its files in); selects the root, replies `{ id }` |
 | `select` | `{entities: string[]}` | set the editor selection (what the panel + `duplicate` act on) |
 | `duplicate` | — | duplicate the current selection (one undo step) |
 | `undo` / `redo` | — | step editor history |
+| `beginTransaction` / `endTransaction` | `{label?}` / — | bracket many actions into one undo step + one settle |
 
 Wire protocol: `{ id?, action, params? }` → `{ id, ok: true, result }` or `{ id, ok: false, error }`.
 
