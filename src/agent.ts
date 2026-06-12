@@ -1,6 +1,17 @@
-import { state, componentKey } from './state'
+import { state, componentKey, clearSelection, selectionClick, selectEntityInTree } from './state'
 import { logicalSnapshot } from './overlays'
-import { setComponentValue, deleteComponent, addComponent, addEntity } from './inspector'
+import {
+  setComponentValue,
+  deleteComponent,
+  addComponent,
+  addEntity,
+  deleteEntity,
+  deleteEntityRecursive,
+  deleteEntityReparent,
+  duplicateSelection,
+  undo,
+  redo
+} from './inspector'
 
 // Agent command channel. The editor scene is a WebSocket *client* that dials a local server the
 // agent spawns — so the agent's endpoint is the stable side and the editor reconnects after a scene
@@ -136,6 +147,40 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       const parent = typeof params.parent === 'number' ? params.parent : 0
       await addEntity(name, parent)
       return { name, parent, status: 'created' }
+    }
+
+    // Delete an entity. mode: 'self' (default, orphans children), 'recursive' (with children),
+    // 'reparent' (keep children, lift to this entity's parent).
+    case 'deleteEntity': {
+      const entity = requireStr(params.entity, 'entity')
+      if (params.mode === 'recursive') await deleteEntityRecursive(entity)
+      else if (params.mode === 'reparent') await deleteEntityReparent(entity)
+      else await deleteEntity(entity)
+      return { entity, mode: params.mode ?? 'self', status: 'deleted' }
+    }
+
+    // Set the editor selection (also what the component panel and duplicate act on).
+    case 'select': {
+      const entities = Array.isArray(params.entities) ? params.entities.map(String) : []
+      clearSelection()
+      for (const id of entities) selectionClick(id, true, false)
+      if (entities.length > 0) selectEntityInTree(state.snapshot, entities[entities.length - 1])
+      return { selected: entities }
+    }
+
+    // Duplicate the current selection (select first). One undo step.
+    case 'duplicate': {
+      await duplicateSelection()
+      return { selected: [...state.selected], status: 'duplicated' }
+    }
+
+    case 'undo': {
+      await undo()
+      return { status: 'undone' }
+    }
+    case 'redo': {
+      await redo()
+      return { status: 'redone' }
     }
 
     default:
