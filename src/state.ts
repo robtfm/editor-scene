@@ -182,6 +182,12 @@ export const state = {
   // which history button is hovered ('undo'/'redo'), for the next-action tooltip; null = none.
   hoveredHistory: null as 'undo' | 'redo' | null,
 
+  // --- agent command channel (WebSocket to a local agent-spawned server) ---
+  // the live socket (loosely typed; WebSocket is provided by the sandbox runtime), or null.
+  agentSocket: null as any,
+  agentStatus: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
+  agentUrl: '',
+
   // --- component clipboard (in-app; copy also exports JSON to the OS clipboard) ---
   // copied components, name -> value. Empty = nothing copied. Set by copy and by manual import.
   clipboard: {} as Record<string, unknown>,

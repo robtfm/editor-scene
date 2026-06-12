@@ -102,6 +102,7 @@ import {
   clipboardNames
 } from './clipboard'
 import { shortcutLabels } from './shortcuts'
+import { connectAgent, disconnectAgent } from './agent'
 
 const PANEL_BG = Color4.create(0.08, 0.08, 0.1, 0.94)
 const HEADER_BG = Color4.create(0.14, 0.14, 0.18, 1)
@@ -3753,6 +3754,43 @@ export function inspectorUi(): ReactEcs.JSX.Element {
           onMouseDown={() => {
             // Re-pull the live scene's current state into the editor (no scene respawn).
             refresh().catch(console.error)
+          }}
+        />
+        <UiEntity
+          uiTransform={{
+            width: 92,
+            height: 22,
+            margin: { left: 18 },
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          uiBackground={{
+            color:
+              state.agentStatus === 'connected'
+                ? TOGGLE_ON
+                : state.agentStatus === 'error'
+                  ? Color4.create(0.6, 0.25, 0.25, 1)
+                  : BUTTON_BG
+          }}
+          uiText={{
+            value:
+              state.agentStatus === 'connected'
+                ? 'Disconnect'
+                : state.agentStatus === 'connecting'
+                  ? 'Connecting…'
+                  : state.agentStatus === 'error'
+                    ? 'Agent ✕'
+                    : 'Connect',
+            fontSize: FS - 1,
+            color: TEXT
+          }}
+          onMouseDown={() => {
+            // Open/close the agent command channel (a local WS the agent spawns).
+            if (state.agentStatus === 'connected' || state.agentStatus === 'connecting') {
+              disconnectAgent()
+            } else {
+              connectAgent()
+            }
           }}
         />
       </UiEntity>
