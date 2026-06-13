@@ -14,6 +14,7 @@ import {
   duplicateSelection,
   componentCatalog,
   componentDefault,
+  reloadSnapshot,
   beginAgentTxn,
   endAgentTxn,
   isAgentTxnOpen,
@@ -126,7 +127,13 @@ async function dispatch(action: string, params: any): Promise<unknown> {
   switch (action) {
     // Read the editor's logical scene state: { entityId: { ComponentName: value } }, overlays
     // reverted. This is the same view the tree and component editor show.
+    //
+    // Live fetch: pull a fresh CRDT snapshot first so read-only/engine-written components
+    // (e.g. GltfContainerLoadingState) reflect current state — the value is at most a tick or
+    // two stale. Skip the refetch while frozen or inside a transaction: there the optimistic
+    // local snapshot is the source of truth and a refetch would drop pending, un-ticked edits.
     case 'getSnapshot':
+      if (!state.frozen && !state.deferReload) await reloadSnapshot()
       return logicalSnapshot(state.snapshot)
 
     // Read the current editor selection — so an agent can act on what the user clicked.
