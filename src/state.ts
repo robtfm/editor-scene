@@ -185,6 +185,10 @@ export const state = {
   // true while an agent transaction is open: per-op settle/reload is deferred to one settle at the
   // end (suppressUndo handles the single-undo-step grouping; see begin/endAgentTxn).
   deferReload: false,
+  // true while an agent action is being dispatched: suppress the editor's "human focus" side effects
+  // (tool switch + tree scroll/expand) so the agent doesn't yank the user's view or active tool. Data
+  // changes and selection still apply; see setActiveAction / selectEntityInTree.
+  agentDriving: false,
   // which history button is hovered ('undo'/'redo'), for the next-action tooltip; null = none.
   hoveredHistory: null as 'undo' | 'redo' | null,
 
@@ -363,6 +367,8 @@ export function canTransform(): boolean {
 // Switch mode. Selecting a tool makes it current (and remembered as the last non-select tool); the
 // Select button toggles select on/off, returning to the last tool.
 export function setActiveAction(action: string): void {
+  // An agent action must not switch the user's active tool (e.g. addEntity auto-selecting translate).
+  if (state.agentDriving) return
   if (action === 'select') {
     state.activeAction = state.activeAction === 'select' ? state.lastTool : 'select'
     return
@@ -578,6 +584,9 @@ export function buildForest(snapshot: Snapshot): Forest {
 // Expand the entity (so its components show), expand all its ancestors (so its
 // row actually renders in the nested tree), and request a scroll to its row.
 export function selectEntityInTree(snapshot: Snapshot, id: string): void {
+  // An agent action must not scroll/expand the tree out from under the user. Selection still applies
+  // (it just highlights the row); this only suppresses the reveal-and-jump.
+  if (state.agentDriving) return
   let cur = parentOf(snapshot, id)
   while (cur !== null && cur in snapshot) {
     state.expandedEntities.add(cur)

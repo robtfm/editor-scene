@@ -1,4 +1,4 @@
-import { state, componentKey, clearSelection, selectionClick, selectEntityInTree } from './state'
+import { state, componentKey, clearSelection, selectionClick } from './state'
 import { logicalSnapshot } from './overlays'
 import { isWorldScaleNonUniform } from './world-pos'
 import { fetchCatalog, importAsset, fetchSceneContent } from './import'
@@ -123,13 +123,22 @@ async function handleMessage(socket: any, data: string): Promise<void> {
     return
   }
   console.log('[agent] action', msg.action, msg.params ?? {})
+  // Suppress the editor's human-focus side effects (tool switch, tree scroll/expand) for the duration
+  // of the dispatch. Ref-counted so a burst of concurrent actions keeps it set until the last settles.
+  agentDepth++
+  state.agentDriving = true
   try {
     const result = await dispatch(msg.action, msg.params ?? {})
     reply(socket, msg.id, true, result)
   } catch (e) {
     reply(socket, msg.id, false, e instanceof Error ? e.message : String(e))
+  } finally {
+    if (--agentDepth === 0) state.agentDriving = false
   }
 }
+
+// In-flight agent-action count; while > 0, state.agentDriving suppresses human-focus side effects.
+let agentDepth = 0
 
 // The editor actions an agent can invoke. Each routes through the GUI's verbs, so the change is
 // captured in the changelog (undoable, saveable) — never a raw console write.
@@ -236,7 +245,8 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       const entities = Array.isArray(params.entities) ? params.entities.map(String) : []
       clearSelection()
       for (const id of entities) selectionClick(id, true, false)
-      if (entities.length > 0) selectEntityInTree(state.snapshot, entities[entities.length - 1])
+      // Selection highlights the rows; we deliberately don't scroll/expand the tree to them (the
+      // agentDriving guard suppresses selectEntityInTree anyway) so the agent doesn't move the view.
       return { selected: entities }
     }
 
