@@ -12,6 +12,7 @@ import { setupMeshSelect } from './mesh-select'
 import { setupInteract } from './interact'
 import { loadShortcuts } from './shortcuts'
 import { startBusySpinner } from './busy'
+import { connectAgentBroadcast } from './agent'
 
 export function main(): void {
   const _log = console.log
@@ -30,6 +31,9 @@ export function main(): void {
   setupInteract()
   startBusySpinner()
   loadShortcuts().catch(console.error)
+  // Open the in-page agent transport for a same-origin host page driving an embedded editor. No-op
+  // (fails safe) where BroadcastChannel isn't available — native deno, or a non-super context.
+  connectAgentBroadcast()
   ReactEcsRenderer.setUiRenderer(inspectorUi)
 
   startInspector().catch((e) => {

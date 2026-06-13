@@ -58,6 +58,13 @@ export function connectAgent(url: string = DEFAULT_URL): void {
     return
   }
   state.agentSocket = socket
+  const wsSend: Send = (body) => {
+    try {
+      socket.send(JSON.stringify(body))
+    } catch (e) {
+      console.error('[agent] ws send failed', e)
+    }
+  }
 
   socket.onopen = async () => {
     console.log('[agent] connected', url)
@@ -71,11 +78,7 @@ export function connectAgent(url: string = DEFAULT_URL): void {
     })
     // the socket may have closed/changed while we awaited
     if (state.agentSocket !== socket) return
-    try {
-      socket.send(JSON.stringify({ hello: 'component-inspector', scene }))
-    } catch (e) {
-      console.error('[agent] hello send failed', e)
-    }
+    wsSend({ hello: 'component-inspector', scene })
   }
   socket.onclose = () => {
     console.log('[agent] closed')
@@ -93,7 +96,14 @@ export function connectAgent(url: string = DEFAULT_URL): void {
   }
   socket.onmessage = (ev: any) => {
     const data = typeof ev?.data === 'string' ? ev.data : String(ev?.data ?? '')
-    handleMessage(socket, data).catch((e) => console.error('[agent] handler error', e))
+    let msg: Incoming
+    try {
+      msg = JSON.parse(data)
+    } catch {
+      reply(wsSend, undefined, false, `invalid JSON: ${data}`)
+      return
+    }
+    handleAction(wsSend, msg).catch((e) => console.error('[agent] handler error', e))
   }
 }
 
@@ -110,16 +120,70 @@ export function disconnectAgent(): void {
   state.agentStatus = 'disconnected'
 }
 
-async function handleMessage(socket: any, data: string): Promise<void> {
-  let msg: Incoming
-  try {
-    msg = JSON.parse(data)
-  } catch {
-    reply(socket, undefined, false, `invalid JSON: ${data}`)
-    return
+// --- in-page (same-origin) transport ---
+// When the engine is embedded in an iframe of a host page, a same-origin BroadcastChannel lets that
+// page drive the editor directly — no WebSocket server, no external process. The channel primitive is
+// only exposed to the super-user scene (see the sandbox allowlist), and is absent in native (deno) /
+// non-super contexts — so this is best-effort: if BroadcastChannel isn't there, we skip it and the
+// WebSocket transport still works. Passive + always-listening: it just joins the named channel and
+// answers actions; if no host page is on the channel, nothing happens.
+const BROADCAST_CHANNEL = 'dcl-inspector-agent'
+let broadcast: any = null
+
+export function connectAgentBroadcast(name: string = BROADCAST_CHANNEL): boolean {
+  const BC = (globalThis as any).BroadcastChannel
+  if (typeof BC !== 'function') {
+    console.log('[agent] BroadcastChannel unavailable; in-page transport disabled')
+    return false
   }
+  disconnectAgentBroadcast()
+  let channel: any
+  try {
+    channel = new BC(name)
+  } catch (e) {
+    console.error('[agent] BroadcastChannel open failed', e)
+    return false
+  }
+  broadcast = channel
+  const send: Send = (body) => {
+    try {
+      channel.postMessage(body)
+    } catch (e) {
+      console.error('[agent] broadcast send failed', e)
+    }
+  }
+  channel.onmessage = (ev: any) => {
+    const msg = ev?.data
+    // The bus carries our own replies/hello too (not echoed back to us) plus any host-page chatter —
+    // only act on well-formed action frames; ignore everything else silently (no reply storms).
+    if (msg === null || typeof msg !== 'object' || typeof msg.action !== 'string') return
+    handleAction(send, msg).catch((e) => console.error('[agent] handler error', e))
+  }
+  console.log('[agent] BroadcastChannel transport open:', name)
+  // Announce the scene (incl. project folder) for a host page already listening; late joiners just
+  // call getSceneInfo. Best-effort — the scene may not be pinned yet, in which case root is null.
+  fetchSceneTarget()
+    .then((scene) => send({ hello: 'component-inspector', scene }))
+    .catch((e) => console.error('[agent] hello broadcast failed', e))
+  return true
+}
+
+export function disconnectAgentBroadcast(): void {
+  if (broadcast !== null) {
+    try {
+      broadcast.close()
+    } catch (e) {
+      console.error('[agent] broadcast close failed', e)
+    }
+    broadcast = null
+  }
+}
+
+// Dispatch one parsed action frame and reply over `send`. Transport-agnostic — the WebSocket and
+// BroadcastChannel paths both parse their own frames, then call this.
+async function handleAction(send: Send, msg: Incoming): Promise<void> {
   if (!msg || typeof msg.action !== 'string') {
-    reply(socket, msg?.id, false, 'message must be { id?, action, params? }')
+    reply(send, msg?.id, false, 'message must be { id?, action, params? }')
     return
   }
   console.log('[agent] action', msg.action, msg.params ?? {})
@@ -129,9 +193,9 @@ async function handleMessage(socket: any, data: string): Promise<void> {
   state.agentDriving = true
   try {
     const result = await dispatch(msg.action, msg.params ?? {})
-    reply(socket, msg.id, true, result)
+    reply(send, msg.id, true, result)
   } catch (e) {
-    reply(socket, msg.id, false, e instanceof Error ? e.message : String(e))
+    reply(send, msg.id, false, e instanceof Error ? e.message : String(e))
   } finally {
     if (--agentDepth === 0) state.agentDriving = false
   }
@@ -324,16 +388,15 @@ function requireStr(v: unknown, name: string): string {
   return v
 }
 
+// A transport's outbound: serialize+send one frame. WebSocket stringifies; BroadcastChannel posts the
+// object via structured clone. Both swallow their own send errors.
+type Send = (body: object) => void
+
 function reply(
-  socket: any,
+  send: Send,
   id: number | string | undefined,
   ok: boolean,
   payload: unknown
 ): void {
-  const body = ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) }
-  try {
-    socket.send(JSON.stringify(body))
-  } catch (e) {
-    console.error('[agent] reply send failed', e)
-  }
+  send(ok ? { id, ok: true, result: payload } : { id, ok: false, error: String(payload) })
 }
