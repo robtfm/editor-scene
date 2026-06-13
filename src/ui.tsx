@@ -24,6 +24,7 @@ import {
   revertDraft,
   valueJson,
   buildForest,
+  HIDDEN_TREE_ENTITY,
   type ComponentKey,
   type Forest,
   type UndoEntry
@@ -1516,7 +1517,7 @@ function treeBody(): ReactEcs.JSX.Element[] {
   const forest = buildForest(state.snapshot)
   const seen = reachable(forest)
   const orphans = Object.keys(state.snapshot)
-    .filter((id) => !seen.has(id))
+    .filter((id) => !seen.has(id) && id !== HIDDEN_TREE_ENTITY)
     .sort((a, b) => Number(a) - Number(b))
   return [...forest.roots, ...orphans].map((id) =>
     entityNode(forest, id, new Set())

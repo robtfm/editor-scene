@@ -548,8 +548,9 @@ export function parentOf(snapshot: Snapshot, id: string): string | null {
 // no components of its own, or is the scene root). Cycles/orphans are surfaced as
 // extra roots by the renderer so nothing is silently dropped.
 // Reserved engine entity 5 (WORLD_ORIGIN) — kept in the snapshot for world-position math, but it's
-// engine plumbing, not scene content, so hide it from the tree.
-const HIDDEN_TREE_ENTITY = '5'
+// engine plumbing, not scene content, so hide it from the tree. Exported so the renderer's orphan
+// sweep excludes it too (it's absent from the forest, so it would otherwise resurface as an orphan).
+export const HIDDEN_TREE_ENTITY = '5'
 
 export function buildForest(snapshot: Snapshot): Forest {
   const ids = Object.keys(snapshot).filter((id) => id !== HIDDEN_TREE_ENTITY)
