@@ -127,6 +127,17 @@ function chevron(expanded: boolean): string {
   return expanded ? '▼' : '▶'
 }
 
+// The scene name shown in the tree header. For a local `dcl start` scene we prefer its on-disk
+// project folder name (recovered from the hash; see scene-path.ts) — more recognisable than the
+// scene.json display title — falling back to that title for deployed scenes or when unresolved.
+function sceneDisplayTitle(): string {
+  if (state.sceneRoot !== null && state.sceneRoot.length > 0) {
+    const parts = state.sceneRoot.split(/[/\\]/).filter((p) => p.length > 0)
+    if (parts.length > 0) return parts[parts.length - 1]
+  }
+  return state.scene?.title ?? 'scene'
+}
+
 function statusText(): string {
   switch (state.status) {
     case 'logging-in':
@@ -139,7 +150,7 @@ function statusText(): string {
       return `Error: ${state.error}`
     case 'ready':
       return state.scene !== undefined
-        ? `${state.scene.title}  ·  ${state.scene.hash.slice(0, 10)}…${
+        ? `${sceneDisplayTitle()}  ·  ${state.scene.hash.slice(0, 10)}…${
             state.frozen ? '  ·  PAUSED' : ''
           }`
         : 'ready'

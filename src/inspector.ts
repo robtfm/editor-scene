@@ -2,6 +2,7 @@ import { BevyApi } from './bevy-api'
 import { autoLogin } from './login'
 import { validateCurated } from './curated'
 import { getCurrentInspectableScene } from './current-scene'
+import { fetchSceneTarget } from './scene-path'
 import {
   state,
   clearComponentEdits,
@@ -105,6 +106,10 @@ export async function refresh(): Promise<void> {
   } catch (e) {
     console.error('set_scene failed:', e)
   }
+
+  // The engine resolves the on-disk project folder for a local scene (null for a deployed one); the
+  // tree title shows it, and the agent gets it in the handshake.
+  state.sceneRoot = (await fetchSceneTarget()).root
 
   await syncFrozenState()
   await reloadSnapshot()

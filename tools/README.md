@@ -110,8 +110,26 @@ compose as code.
 | `duplicate` | — | duplicate the current selection (one undo step) |
 | `undo` / `redo` | — | step editor history |
 | `beginTransaction` / `endTransaction` | `{label?}` / — | bracket many actions into one undo step + one settle |
+| `reloadContent` | — | re-read the scene's content map from the dev server (picks up files added on disk); replies `{ files, count }` |
+| `getSceneInfo` | — | the scene being driven: `{ hash, root, projectId, parcels, title }` (`root` = on-disk project folder, or null if deployed) |
 
 Wire protocol: `{ id?, action, params? }` → `{ id, ok: true, result }` or `{ id, ok: false, error }`.
+
+## Adding your own assets (textures, gltf, audio)
+
+No "upload" action: add a file by writing it into the project folder, then referencing it by its
+project-relative path. (`importAsset` is for the curated catalog, not your own files.) The handshake
+gives you the folder as `ch.scene.root` — the absolute on-disk path, or `null` for a deployed scene
+(no editable folder; check first). **After writing, call `reloadContent` before `setComponent`** —
+the engine won't see the new file until it re-scans, so the `src` 404s otherwise.
+
+```js
+if (ch.scene?.root) {
+  fs.writeFileSync(path.join(ch.scene.root, 'images/brick.png'), bytes)
+  await ch.reloadContent()                                   // required: engine re-scans the folder
+  await ch.setComponent(e, 'Material', { texture: { tex: { src: 'images/brick.png' } } })
+}
+```
 
 ## Conventions
 

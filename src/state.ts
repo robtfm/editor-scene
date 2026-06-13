@@ -24,6 +24,9 @@ export const state = {
   status: 'logging-in' as InspectorStatus,
   error: '',
   scene: undefined as LiveSceneInfo | undefined,
+  // The pinned scene's on-disk project folder for a local `dcl start` scene (b64-decoded from its
+  // hash; see scene-path.ts), or null for a deployed/remote scene. Shown in the tree title.
+  sceneRoot: null as string | null,
   snapshot: {} as Snapshot,
   // root (entity 0) expanded by default so the scene's content shows on load.
   expandedEntities: new Set<string>(['0']),

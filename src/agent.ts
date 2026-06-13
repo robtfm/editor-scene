@@ -1,7 +1,8 @@
 import { state, componentKey, clearSelection, selectionClick, selectEntityInTree } from './state'
 import { logicalSnapshot } from './overlays'
 import { isWorldScaleNonUniform } from './world-pos'
-import { fetchCatalog, importAsset } from './import'
+import { fetchCatalog, importAsset, fetchSceneContent } from './import'
+import { fetchSceneTarget } from './scene-path'
 import {
   setComponentValue,
   deleteComponent,
@@ -58,11 +59,20 @@ export function connectAgent(url: string = DEFAULT_URL): void {
   }
   state.agentSocket = socket
 
-  socket.onopen = () => {
+  socket.onopen = async () => {
     console.log('[agent] connected', url)
     state.agentStatus = 'connected'
+    // Tell the agent which scene it's driving — including the on-disk project folder when it's a
+    // local scene (so it can add textures/assets directly, then call reloadContent). null root =
+    // deployed/remote scene, not locally editable.
+    const scene = await fetchSceneTarget().catch((e) => {
+      console.error('[agent] scene target fetch failed', e)
+      return null
+    })
+    // the socket may have closed/changed while we awaited
+    if (state.agentSocket !== socket) return
     try {
-      socket.send(JSON.stringify({ hello: 'component-inspector' }))
+      socket.send(JSON.stringify({ hello: 'component-inspector', scene }))
     } catch (e) {
       console.error('[agent] hello send failed', e)
     }
@@ -247,6 +257,18 @@ async function dispatch(action: string, params: any): Promise<unknown> {
       await endAgentTxn()
       return { status: 'transaction committed' }
     }
+
+    // Force the engine to re-read the scene's content map from the dev server, picking up files
+    // added on disk (textures, gltfs, …) outside the editor — the agent writes a file into the
+    // project folder (see the handshake's scene.root), then calls this. Returns the refreshed list.
+    case 'reloadContent': {
+      const files = await fetchSceneContent()
+      return { files, count: files.length }
+    }
+
+    // Read the scene being edited: its hash and (for a local scene) its on-disk project folder.
+    case 'getSceneInfo':
+      return await fetchSceneTarget()
 
     case 'undo': {
       await undo()

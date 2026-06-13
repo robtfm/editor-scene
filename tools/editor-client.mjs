@@ -30,6 +30,9 @@ export class EditorChannel {
     this._id = 1
     this._pending = new Map() // id -> { resolve, reject }
     this._waiters = [] // resolve fns waiting for a connection
+    // The scene being driven, from the editor's handshake: { hash, root, projectId, parcels, title }.
+    // `root` is the on-disk project folder for a local scene, null for a deployed one. Set on connect.
+    this.scene = null
   }
 
   // Start the server. Returns a Promise that resolves to the channel once a scene connects.
@@ -63,7 +66,10 @@ export class EditorChannel {
     } catch {
       return
     }
-    if (m.hello) return
+    if (m.hello) {
+      this.scene = m.scene ?? null
+      return
+    }
     const p = this._pending.get(m.id)
     if (p) {
       this._pending.delete(m.id)
@@ -139,6 +145,16 @@ export class EditorChannel {
   }
   redo() {
     return this.call('redo')
+  }
+  // Force the engine to re-read the scene's content map from the dev server (picks up files added on
+  // disk — textures, gltfs — outside the editor). Call after writing a file into scene.root. Returns
+  // { files, count }.
+  reloadContent() {
+    return this.call('reloadContent')
+  }
+  // The scene being driven: { hash, root }. Same data as the handshake's `ch.scene`, re-fetched live.
+  getSceneInfo() {
+    return this.call('getSceneInfo')
   }
   beginTransaction(label) {
     return this.call('beginTransaction', { label })
