@@ -1,8 +1,15 @@
 # Editor agent channel
 
-Drive the editor scene from an external agent over a WebSocket. The editor scene is the WS
-**client** — it dials a server you spawn — so your endpoint is the stable side and the editor
-reconnects after a scene reload.
+Drive the editor scene programmatically through the same wire protocol —
+`{ id?, action, params? }` → `{ id, ok, result }` / `{ id, ok, error }` — over either of two
+transports:
+
+- **WebSocket** (external agent / CLI) — the editor is the WS **client**; it dials a server you
+  spawn, so your endpoint is the stable side and the editor reconnects after a scene reload. This is
+  the rest of this doc unless noted.
+- **BroadcastChannel** (same-origin host page) — when the engine is embedded in an iframe, a host
+  page on the same origin drives the editor in-browser, no server or external process. See
+  [Driving from a host page](#driving-from-a-same-origin-host-page).
 
 Every action routes through the editor's GUI verbs, so changes are **captured** (undoable,
 saveable). There is no raw console access: an agent can only do what the editor allows.
@@ -53,6 +60,51 @@ const t = snap[e].Transform
 t.position.y += 1
 await ch.setComponent(e, 'Transform', t)         // captured → undoable
 ```
+
+## Driving from a same-origin host page
+
+When the explorer is embedded in an `<iframe>` of your own page, the editor can be driven **in the
+browser** with no server or external process. The editor (when run as the super-user `--ui` scene)
+auto-joins a `BroadcastChannel` named **`dcl-inspector-agent`** on startup; your same-origin page
+joins the same channel and posts the same action frames. `BroadcastChannel` spans windows, iframes,
+and the scene's worker, so the host page and the scene are direct peers — the iframe boundary is
+transparent.
+
+```js
+const ch = new BroadcastChannel('dcl-inspector-agent')
+let _id = 1; const _pending = new Map()
+ch.onmessage = (e) => {
+  const m = e.data
+  if (m.hello) return                                  // editor announced { hello, scene }
+  const r = _pending.get(m.id); if (r) { _pending.delete(m.id); r(m) }
+}
+const call = (action, params = {}) => new Promise((res, rej) => {
+  const id = _id++; _pending.set(id, (m) => (m.ok ? res(m.result) : rej(new Error(m.error))))
+  ch.postMessage({ id, action, params })
+})
+
+await call('getSceneInfo')                             // { hash, root, projectId, parcels, title }
+await call('getSnapshot')
+```
+
+Same protocol, same actions, same capture/undo guarantees as the WebSocket path (both share one
+dispatch layer) — only the connection differs:
+
+- **No connection handshake.** Both sides just join the named channel whenever they spin up; order
+  doesn't matter and there's no reconnect logic. On a scene reload the editor rejoins and re-emits
+  `hello`.
+- **The initial `hello` isn't replayed.** The editor broadcasts `{ hello, scene }` once on open; a
+  page that joins later misses it. Don't wait for it — call **`getSceneInfo`** to get the scene
+  identity/folder on demand.
+- **Super-user only, fail-safe.** The engine exposes `BroadcastChannel` to the super-user scene
+  alone; in a non-super context or native (deno) it's absent, so the editor logs and skips it (the
+  WebSocket transport is unaffected). Confirm it's live via the console line
+  `[agent] BroadcastChannel transport open: dcl-inspector-agent`.
+- **Single driver only.** The channel is a shared bus with no per-driver routing — replies are
+  broadcast to everyone and aren't addressed, and each driver runs its own `id` counter. Two
+  concurrent in-browser drivers would cross-talk (collide on ids, and see each other's frames). Keep
+  one driver on the channel; if you need fan-out, orchestrate it in that single driver (or use the
+  WebSocket harness, which arbitrates multiple clients centrally).
 
 ## Transactions
 
