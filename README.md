@@ -19,6 +19,17 @@ response channel via a generic `consoleCommand(cmd, args)` wrapper added to
 
 Component display detail and modification build on top of this.
 
+## Agent channel
+
+The editor can be driven programmatically — by an external agent over a
+WebSocket, or by a same-origin host page (when the engine is embedded) over an
+in-page `BroadcastChannel`. Both speak one small action protocol, and every
+action routes through the editor's own GUI verbs, so changes stay **captured**
+(undoable, saveable) — there is no raw console access.
+
+See [`tools/README.md`](tools/README.md) for the protocol, the action reference,
+and client/harness usage.
+
 ## Running
 
 This is loaded as the explorer's `--ui` (super-user) scene, replacing the
